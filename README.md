@@ -2,6 +2,8 @@
 
 Groovarr is a conversational music-operations service that sits next to an existing Navidrome and Lidarr setup.
 
+![Groovarr UI](<./Screenshot 2026-03-12 at 6.04.46 PM.png>)
+
 It provides:
 
 - natural-language chat over your music library
@@ -16,6 +18,7 @@ The primary deployment path is the image-first bundle in this directory:
 
 - [docker-compose.yml](./docker-compose.yml)
 - [.env.example](./.env.example)
+- [INSTALLATION.md](./INSTALLATION.md)
 - [DEPLOYMENT.md](./DEPLOYMENT.md)
 - [DEPENDENCIES.md](./DEPENDENCIES.md)
 
@@ -100,6 +103,18 @@ Last.fm note:
 - `LASTFM_API_KEY` is optional but required if `SYNC_LASTFM_ENABLED=true`
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full deployment contract.
+
+## Installation
+
+For the shortest path, follow [INSTALLATION.md](./INSTALLATION.md).
+
+The high-level flow is:
+
+1. Copy [.env.example](./.env.example) to `.env`.
+2. Point Groovarr at your existing Navidrome and Lidarr services.
+3. Mount your Navidrome data directory so Groovarr can read `navidrome.db`.
+4. Provide Soulseek credentials for the bundled downloader sidecar.
+5. Start the stack with `docker compose --env-file .env up -d`.
 
 ## Image Model
 
