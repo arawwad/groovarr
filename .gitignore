@@ -1,0 +1,10 @@
+.DS_Store
+._*
+
+.env
+.env.local
+
+groovarr-data/
+server
+
+*.log

@@ -1,0 +1,34 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS upstream
+
+ARG TARGETARCH
+ARG SLSK_BATCHDL_REPO=https://github.com/fiso64/slsk-batchdl.git
+ARG SLSK_BATCHDL_REF=master
+
+RUN apk add --no-cache git
+
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) rid="linux-musl-x64" ;; \
+      arm64) rid="linux-musl-arm64" ;; \
+      arm) rid="linux-musl-arm" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    git clone --depth 1 --branch "$SLSK_BATCHDL_REF" "$SLSK_BATCHDL_REPO" /src; \
+    project="$(find /src -name '*.csproj' | head -n 1)"; \
+    test -n "$project"; \
+    dotnet publish "$project" -c Release -r "$rid" --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o /out
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates icu-libs libgcc libstdc++ tzdata zlib
+
+COPY --from=upstream /out /opt/sldl
+COPY dist/downloader/entrypoint.sh /usr/local/bin/groovarr-downloader
+
+RUN set -eux; \
+    app="$(find /opt/sldl -maxdepth 1 -type f -perm -111 | head -n 1)"; \
+    test -n "$app"; \
+    cp "$app" /usr/local/bin/sldl; \
+    chmod +x /usr/local/bin/sldl /usr/local/bin/groovarr-downloader
+
+ENTRYPOINT ["/usr/local/bin/groovarr-downloader"]

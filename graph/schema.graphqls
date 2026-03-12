@@ -1,0 +1,232 @@
+scalar Time
+
+type Query {
+  albums(
+    limit: Int = 10
+    rating: Int
+    ratingBelow: Int
+    unplayed: Boolean
+    notPlayedSince: Time
+    genre: String
+    year: Int
+    artistName: String
+  ): [Album!]!
+  
+  artists(limit: Int = 10, minPlayCount: Int): [Artist!]!
+  tracks(
+    limit: Int = 10
+    mostPlayed: Boolean
+    playedSince: Time
+    playedUntil: Time
+    onlyPlayed: Boolean
+  ): [Track!]!
+  
+  similarArtists(seedArtist: String!, limit: Int = 5): [Artist!]!
+  similarAlbums(seedAlbum: String!, limit: Int = 5): [Album!]!
+  
+  artistLibraryStats(
+    filter: ArtistLibraryStatsFilter
+    sort: ArtistLibraryStatsSort = ALBUM_COUNT_ASC
+    limit: Int = 25
+  ): [ArtistLibraryStat!]!
+
+  artistListeningStats(
+    filter: ArtistListeningStatsFilter
+    sort: ArtistListeningStatsSort = PLAYS_IN_WINDOW_DESC
+    limit: Int = 25
+  ): [ArtistListeningStat!]!
+
+  libraryFacetCounts(
+    field: LibraryFacetField!
+    filter: LibraryFacetFilter
+    limit: Int = 10
+  ): [LibraryFacetCount!]!
+
+  albumRelationshipStats(
+    filter: AlbumRelationshipStatsFilter
+    sort: AlbumRelationshipStatsSort = NAME_ASC
+    limit: Int = 25
+  ): [AlbumRelationshipStat!]!
+
+  albumLibraryStats(
+    filter: AlbumLibraryStatsFilter
+    sort: AlbumLibraryStatsSort = LAST_PLAYED_DESC
+    limit: Int = 25
+  ): [AlbumLibraryStat!]!
+
+  libraryStats: LibraryStats!
+}
+
+type Mutation {
+  deleteAlbum(id: ID!): Boolean!
+  deleteArtist(id: ID!): Boolean!
+}
+
+type Album {
+  id: ID!
+  name: String!
+  artistName: String!
+  rating: Int!
+  playCount: Int!
+  lastPlayed: Time
+  year: Int
+  genre: String
+}
+
+type Artist {
+  id: ID!
+  name: String!
+  rating: Int!
+  playCount: Int!
+}
+
+type Track {
+  id: ID!
+  title: String!
+  artistName: String!
+  playCount: Int!
+  lastPlayed: Time
+}
+
+type LibraryStats {
+  totalAlbums: Int!
+  totalArtists: Int!
+  unplayedAlbums: Int!
+  ratedAlbums: Int!
+}
+
+type ArtistLibraryStat {
+  artistName: String!
+  albumCount: Int!
+  totalPlayCount: Int!
+  lastPlayed: Time
+  unplayedAlbumCount: Int!
+  playedInWindow: Int!
+}
+
+type ArtistListeningStat {
+  artistName: String!
+  albumCount: Int!
+  totalPlayCount: Int!
+  playsInWindow: Int!
+  lastPlayed: Time
+}
+
+type LibraryFacetCount {
+  value: String!
+  count: Int!
+}
+
+type AlbumRelationshipStat {
+  albumName: String!
+  artistName: String!
+  year: Int
+  artistAlbumCount: Int!
+}
+
+input ArtistLibraryStatsFilter {
+  artistName: String
+  genre: String
+  exactAlbums: Int
+  minAlbums: Int
+  maxAlbums: Int
+  minTotalPlays: Int
+  maxTotalPlays: Int
+  inactiveSince: Time
+  playedSince: Time
+  playedUntil: Time
+  maxPlaysInWindow: Int
+}
+
+enum ArtistLibraryStatsSort {
+  ALBUM_COUNT_ASC
+  NAME_ASC
+  LAST_PLAYED_DESC
+  TOTAL_PLAY_COUNT_DESC
+}
+
+input ArtistListeningStatsFilter {
+  artistName: String
+  playedSince: Time
+  playedUntil: Time
+  minPlaysInWindow: Int
+  maxPlaysInWindow: Int
+  minAlbums: Int
+  maxAlbums: Int
+}
+
+enum ArtistListeningStatsSort {
+  PLAYS_IN_WINDOW_DESC
+  LAST_PLAYED_DESC
+  NAME_ASC
+  ALBUM_COUNT_DESC
+  TOTAL_PLAY_COUNT_DESC
+}
+
+input LibraryFacetFilter {
+  genre: String
+  artistName: String
+  year: Int
+  minYear: Int
+  maxYear: Int
+  unplayed: Boolean
+  notPlayedSince: Time
+}
+
+enum LibraryFacetField {
+  GENRE
+  YEAR
+  DECADE
+  ARTIST_NAME
+}
+
+input AlbumRelationshipStatsFilter {
+  artistExactAlbums: Int
+  artistMinAlbums: Int
+  artistMaxAlbums: Int
+  genre: String
+  unplayed: Boolean
+  notPlayedSince: Time
+}
+
+enum AlbumRelationshipStatsSort {
+  NAME_ASC
+  YEAR_ASC
+}
+
+type AlbumLibraryStat {
+  albumName: String!
+  artistName: String!
+  year: Int
+  genre: String
+  rating: Int!
+  totalPlayCount: Int!
+  lastPlayed: Time
+  playedInWindow: Int!
+}
+
+input AlbumLibraryStatsFilter {
+  artistName: String
+  genre: String
+  year: Int
+  minYear: Int
+  maxYear: Int
+  minTotalPlays: Int
+  maxTotalPlays: Int
+  minRating: Int
+  maxRating: Int
+  inactiveSince: Time
+  playedSince: Time
+  playedUntil: Time
+  maxPlaysInWindow: Int
+  unplayed: Boolean
+}
+
+enum AlbumLibraryStatsSort {
+  LAST_PLAYED_DESC
+  LAST_PLAYED_ASC
+  TOTAL_PLAY_COUNT_DESC
+  RATING_DESC
+  YEAR_ASC
+  NAME_ASC
+}

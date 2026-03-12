@@ -1,0 +1,140 @@
+services:
+  groovarr-db:
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    image: groovarr-db:dev
+    container_name: groovarr-db
+    environment:
+      POSTGRES_DB: groovarr
+      POSTGRES_USER: groovarr
+      POSTGRES_PASSWORD: ${GROOVARR_DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - ${GROOVARR_DATA_DIR:-./groovarr-data}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U groovarr -d groovarr"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  groovarr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: groovarr
+    environment:
+      DATABASE_URL: postgres://groovarr:${GROOVARR_DB_PASSWORD}@groovarr-db:5432/groovarr?sslmode=disable&pool_max_conns=4&pool_min_conns=1
+      PORT: 8088
+      TZ: ${TZ:-UTC}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      DEFAULT_CHAT_MODEL: ${DEFAULT_CHAT_MODEL:-llama-3.3-70b-versatile}
+      DISCOVERY_MODEL: ${DISCOVERY_MODEL:-}
+      HF_DISCOVERY_MODEL: ${HF_DISCOVERY_MODEL:-}
+      GROQ_DISCOVERY_MODEL: ${GROQ_DISCOVERY_MODEL:-}
+      AGENT_PROMPT_LAYOUT: ${AGENT_PROMPT_LAYOUT:-split}
+      AGENT_LOG_MODEL_USAGE: ${AGENT_LOG_MODEL_USAGE:-true}
+      GROQ_CHAT_COMPLETIONS_URL: ${GROQ_CHAT_COMPLETIONS_URL:-}
+      HUGGINGFACE_CHAT_COMPLETIONS_URL: ${HUGGINGFACE_CHAT_COMPLETIONS_URL:-}
+      NAVIDROME_DB_PATH: /navidrome/navidrome.db
+      NAVIDROME_URL: ${NAVIDROME_URL}
+      NAVIDROME_USERNAME: ${NAVIDROME_USERNAME}
+      NAVIDROME_PASSWORD: ${NAVIDROME_PASSWORD}
+      LIDARR_URL: ${LIDARR_URL:-}
+      LIDARR_API_KEY: ${LIDARR_API_KEY:-}
+      LIDARR_ROOT_FOLDER_PATH: ${LIDARR_ROOT_FOLDER_PATH:-}
+      LIDARR_QUALITY_PROFILE_ID: ${LIDARR_QUALITY_PROFILE_ID:-1}
+      LIDARR_METADATA_PROFILE_ID: ${LIDARR_METADATA_PROFILE_ID:-1}
+      EMBEDDINGS_ENDPOINT: ${EMBEDDINGS_ENDPOINT:-}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
+      SYNC_ARTIST_LIMIT: ${SYNC_ARTIST_LIMIT:-150}
+      SYNC_ALBUM_LIMIT: ${SYNC_ALBUM_LIMIT:-300}
+      SYNC_TRACK_LIMIT: ${SYNC_TRACK_LIMIT:-1200}
+      SYNC_EMBED_BATCH_SIZE: ${SYNC_EMBED_BATCH_SIZE:-100}
+      SYNC_EMBED_BATCH_PAUSE_MS: ${SYNC_EMBED_BATCH_PAUSE_MS:-120}
+      SYNC_EMBED_RETRIES: ${SYNC_EMBED_RETRIES:-2}
+      SYNC_EMBED_RETRY_BACKOFF_MS: ${SYNC_EMBED_RETRY_BACKOFF_MS:-250}
+      SYNC_MUSICBRAINZ_ENABLED: ${SYNC_MUSICBRAINZ_ENABLED:-false}
+      SYNC_MUSICBRAINZ_ALBUMS_PER_SYNC: ${SYNC_MUSICBRAINZ_ALBUMS_PER_SYNC:-5}
+      SYNC_MUSICBRAINZ_BASE_URL: ${SYNC_MUSICBRAINZ_BASE_URL:-}
+      SYNC_MUSICBRAINZ_USER_AGENT: ${SYNC_MUSICBRAINZ_USER_AGENT:-}
+      SYNC_MUSICBRAINZ_MIN_GAP_MS: ${SYNC_MUSICBRAINZ_MIN_GAP_MS:-1100}
+      SYNC_LASTFM_ENABLED: ${SYNC_LASTFM_ENABLED:-false}
+      LASTFM_API_KEY: ${LASTFM_API_KEY:-}
+      SYNC_LASTFM_BASE_URL: ${SYNC_LASTFM_BASE_URL:-}
+      SYNC_LASTFM_ALBUMS_PER_SYNC: ${SYNC_LASTFM_ALBUMS_PER_SYNC:-10}
+      PLAYLIST_QUEUE_DIR: /groovarr-data/queue/weekly-queue
+      PLAYLIST_QUEUE_STATUS_DIR: /groovarr-data/queue/playlist-processed
+      PLAYLIST_RECONCILE_INTERVAL_MINUTES: ${PLAYLIST_RECONCILE_INTERVAL_MINUTES:-3}
+      AGENT_MAX_ITERATIONS: ${AGENT_MAX_ITERATIONS:-6}
+      AGENT_MAX_COMPLETION_TOKENS: ${AGENT_MAX_COMPLETION_TOKENS:-450}
+      AGENT_MAX_TOOL_RESULT_CHARS: ${AGENT_MAX_TOOL_RESULT_CHARS:-2200}
+      MAX_CHAT_BODY_BYTES: ${MAX_CHAT_BODY_BYTES:-32768}
+      CHAT_REQUEST_TIMEOUT_SEC: ${CHAT_REQUEST_TIMEOUT_SEC:-25}
+      CHAT_MAX_HISTORY_MESSAGES: ${CHAT_MAX_HISTORY_MESSAGES:-12}
+      CHAT_MAX_HISTORY_MESSAGE_CHARS: ${CHAT_MAX_HISTORY_MESSAGE_CHARS:-1200}
+      PENDING_ACTION_TTL_MINUTES: ${PENDING_ACTION_TTL_MINUTES:-30}
+      PENDING_ACTION_TIMEOUT_SEC: ${PENDING_ACTION_TIMEOUT_SEC:-90}
+      RECENT_LISTENING_SUMMARY_TTL_SECONDS: ${RECENT_LISTENING_SUMMARY_TTL_SECONDS:-45}
+      HTTP_READ_HEADER_TIMEOUT_SEC: ${HTTP_READ_HEADER_TIMEOUT_SEC:-5}
+      HTTP_READ_TIMEOUT_SEC: ${HTTP_READ_TIMEOUT_SEC:-10}
+      HTTP_WRITE_TIMEOUT_SEC: ${HTTP_WRITE_TIMEOUT_SEC:-40}
+      HTTP_IDLE_TIMEOUT_SEC: ${HTTP_IDLE_TIMEOUT_SEC:-60}
+    ports:
+      - ${GROOVARR_PORT:-7077}:8088
+    volumes:
+      - ${NAVIDROME_DATA_PATH}:/navidrome:ro
+      - ${GROOVARR_DATA_DIR:-./groovarr-data}:/groovarr-data
+    depends_on:
+      groovarr-db:
+        condition: service_healthy
+    networks:
+      - default
+      - integration
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8088/api/health > /dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  groovarr-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile.downloader
+    image: groovarr-downloader:dev
+    container_name: groovarr-downloader
+    environment:
+      TZ: ${TZ:-UTC}
+      SLSK_USERNAME: ${SLSK_USERNAME}
+      SLSK_PASSWORD: ${SLSK_PASSWORD}
+    volumes:
+      - ${GROOVARR_DATA_DIR:-./groovarr-data}/slsk-batchdl:/config
+      - ${GROOVARR_DATA_DIR:-./groovarr-data}/queue:/data/queue
+      - ${GROOVARR_DATA_DIR:-./groovarr-data}/downloads/inbox:/music-beets/inbox
+      - ${BEETS_LIBRARY_PATH}:/music-beets/library
+    restart: unless-stopped
+
+  groovarr-importer:
+    build:
+      context: .
+      dockerfile: Dockerfile.importer
+    image: groovarr-importer:dev
+    container_name: groovarr-importer
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${GROOVARR_DATA_DIR:-./groovarr-data}/beets:/config-data
+      - ${GROOVARR_DATA_DIR:-./groovarr-data}/downloads/inbox:/music-beets/inbox
+      - ${BEETS_LIBRARY_PATH}:/music-beets/library
+    restart: unless-stopped
+
+networks:
+  integration:
+    name: ${GROOVARR_INTEGRATION_NETWORK:-docker_media-network}
+    external: true

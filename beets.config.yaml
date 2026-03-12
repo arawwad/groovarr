@@ -1,0 +1,39 @@
+directory: /music-beets/library
+library: /config-data/library.db
+threaded: yes
+plugins: fetchart embedart replaygain scrub
+
+import:
+  move: yes
+  copy: no
+  write: yes
+  incremental: yes
+  resume: yes
+  quiet: yes
+  timid: no
+  none_rec_action: asis
+  quiet_fallback: asis
+  duplicate_action: keep
+  log: /config-data/import.log
+
+match:
+  preferred:
+    media: ['Digital Media|File', 'CD']
+
+fetchart:
+  auto: yes
+  cautious: yes
+  minwidth: 500
+
+embedart:
+  auto: yes
+  ifempty: yes
+
+replaygain:
+  auto: yes
+  backend: ffmpeg
+
+paths:
+  default: $albumartist/$album%aunique{}/$track - $title
+  singleton: Singles/$artist/$title
+  comp: Compilations/$album%aunique{}/$track - $title
