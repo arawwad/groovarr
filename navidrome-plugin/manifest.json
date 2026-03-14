@@ -1,0 +1,45 @@
+{
+  "id": "groovarrsimilarity",
+  "name": "Groovarr Similarity",
+  "author": "Abdallah",
+  "version": "0.1.0",
+  "homepage": "https://github.com/abdallah/docker/tree/main/groovarr/navidrome-plugin",
+  "description": "Route Navidrome similarity hooks through Groovarr, optionally backed by AudioMuse via Groovarr's hybrid provider.",
+  "capabilities": ["similar-artists", "similar-songs-by-track", "similar-songs-by-artist"],
+  "permissions": {
+    "http": {
+      "reason": "The plugin calls Groovarr's similarity API endpoints.",
+      "requiredHosts": ["*"]
+    }
+  },
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "groovarr_url": {
+          "type": "string",
+          "title": "Groovarr URL",
+          "default": "http://groovarr:8088"
+        },
+        "provider": {
+          "type": "string",
+          "title": "Provider",
+          "default": "hybrid",
+          "enum": ["hybrid", "local", "audiomuse"]
+        },
+        "exclude_recent_days": {
+          "type": "integer",
+          "title": "Exclude Recent Days",
+          "default": 14,
+          "minimum": 0
+        },
+        "exclude_seed_artist": {
+          "type": "boolean",
+          "title": "Exclude Seed Artist",
+          "default": false
+        }
+      },
+      "required": ["groovarr_url"]
+    }
+  }
+}

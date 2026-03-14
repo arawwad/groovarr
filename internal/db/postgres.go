@@ -1364,6 +1364,43 @@ func (c *Client) GetAlbumByName(ctx context.Context, name string) (*Album, error
 	return &a, nil
 }
 
+func (c *Client) GetTrackByID(ctx context.Context, id string) (*Track, error) {
+	query := `SELECT id, album_id, title, artist_name, rating, play_count, last_played, embedding
+		FROM tracks
+		WHERE id = $1
+		LIMIT 1`
+	row := c.pool.QueryRow(ctx, query, id)
+
+	var t Track
+	err := row.Scan(&t.ID, &t.AlbumID, &t.Title, &t.ArtistName, &t.Rating, &t.PlayCount, &t.LastPlayed, &t.Embedding)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (c *Client) GetTrackByArtistTitle(ctx context.Context, artistName, title string) (*Track, error) {
+	query := `SELECT id, album_id, title, artist_name, rating, play_count, last_played, embedding
+		FROM tracks
+		WHERE artist_name ILIKE $1 AND title ILIKE $2
+		ORDER BY play_count DESC, last_played DESC NULLS LAST
+		LIMIT 1`
+	row := c.pool.QueryRow(ctx, query, artistName, title)
+
+	var t Track
+	err := row.Scan(&t.ID, &t.AlbumID, &t.Title, &t.ArtistName, &t.Rating, &t.PlayCount, &t.LastPlayed, &t.Embedding)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
 func (c *Client) FindSimilarArtists(ctx context.Context, embedding pgvector.Vector, limit int) ([]Artist, error) {
 	query := `SELECT id, name, COALESCE(rating, 0), COALESCE(play_count, 0), 1 - (embedding <=> $1) AS similarity 
 	          FROM artists WHERE embedding IS NOT NULL 
@@ -1884,7 +1921,7 @@ func (c *Client) FindSimilarTracksByEmbedding(ctx context.Context, embedding pgv
 		limit = 10
 	}
 
-	query := `SELECT t.id, t.album_id, t.title, t.artist_name, t.play_count, t.last_played,
+	query := `SELECT t.id, t.album_id, t.title, t.artist_name, t.rating, t.play_count, t.last_played,
 	                 1 - (t.embedding <=> $1) AS similarity
 	          FROM tracks t
 	          WHERE t.embedding IS NOT NULL`
@@ -1918,6 +1955,7 @@ func (c *Client) FindSimilarTracksByEmbedding(ctx context.Context, embedding pgv
 			&st.AlbumID,
 			&st.Title,
 			&st.ArtistName,
+			&st.Rating,
 			&st.PlayCount,
 			&st.LastPlayed,
 			&st.Similarity,

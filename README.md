@@ -92,6 +92,15 @@ GROQ_API_KEY=
 HUGGINGFACE_API_KEY=
 DEFAULT_CHAT_MODEL=llama-3.3-70b-versatile
 EMBEDDINGS_ENDPOINT=
+SIMILARITY_DEFAULT_PROVIDER=hybrid
+AUDIOMUSE_URL=
+AUDIOMUSE_TRACKS_PATH=/api/similar_tracks
+AUDIOMUSE_ARTISTS_PATH=/api/similar_artists
+AUDIOMUSE_HEALTH_PATH=/
+AUDIOMUSE_TIMEOUT_SECONDS=8
+AUDIOMUSE_BOOTSTRAP_ENABLED=true
+AUDIOMUSE_BOOTSTRAP_RECENT_ALBUMS=0
+AUDIOMUSE_BOOTSTRAP_TOP_N_MOODS=5
 SYNC_LASTFM_ENABLED=false
 LASTFM_API_KEY=
 SYNC_LASTFM_ALBUMS_PER_SYNC=10
@@ -103,6 +112,33 @@ Last.fm note:
 - `LASTFM_API_KEY` is optional but required if `SYNC_LASTFM_ENABLED=true`
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full deployment contract.
+
+### Similarity API
+
+Groovarr now exposes a thin similarity API intended for a Navidrome plugin or any other local client:
+
+- `GET /api/similarity/health`
+- `POST /api/similarity/tracks`
+- `POST /api/similarity/songs/by-artist`
+- `POST /api/similarity/artists`
+
+Providers:
+
+- `local`: Groovarr's own library embeddings
+- `audiomuse`: AudioMuse-backed similarity, when configured
+- `hybrid`: merge AudioMuse and local candidates, then rerank in Groovarr
+
+Track request example:
+
+```json
+{
+  "seedTrackId": "navidrome-track-id",
+  "provider": "hybrid",
+  "limit": 25,
+  "excludeRecentDays": 14,
+  "excludeSeedArtist": false
+}
+```
 
 ## Installation
 

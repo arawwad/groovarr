@@ -380,6 +380,21 @@ func PromptCatalog() []ToolSpec {
 			UseWhen:     "Only when the user explicitly asks for nearest library matches, not general recommendations.",
 			Args: []ToolArgSpec{
 				{Name: "seedArtist", Type: "string", Required: true, Description: "Reference artist."},
+				{Name: "provider", Type: "string", Description: "Similarity provider: local, audiomuse, or hybrid."},
+				{Name: "limit", Type: "number", Description: "Maximum results."},
+			},
+		},
+		{
+			Name:        "similarTracks",
+			Description: "Find nearest track matches already in the user's library.",
+			UseWhen:     "Only when the user explicitly asks for nearest library track matches or an instant-mix style seed expansion.",
+			Args: []ToolArgSpec{
+				{Name: "seedTrackId", Type: "string", Description: "Reference track ID."},
+				{Name: "seedTrackTitle", Type: "string", Description: "Reference track title when ID is unavailable."},
+				{Name: "seedArtistName", Type: "string", Description: "Reference artist when seedTrackTitle is used."},
+				{Name: "provider", Type: "string", Description: "Similarity provider: local, audiomuse, or hybrid."},
+				{Name: "excludeRecentDays", Type: "number", Description: "Exclude tracks played within this many days."},
+				{Name: "excludeSeedArtist", Type: "boolean", Description: "Exclude tracks by the seed artist."},
 				{Name: "limit", Type: "number", Description: "Maximum results."},
 			},
 		},
