@@ -118,6 +118,17 @@ func (s *Syncer) syncOnce(ctx context.Context) {
 	if err := s.syncPlayEvents(ctx); err != nil {
 		log.Error().Err(err).Msg("Failed to sync play events")
 	}
+	if summary, err := s.pgClient.RebuildTasteProfile(ctx); err != nil {
+		log.Error().Err(err).Msg("Failed to rebuild taste profile")
+	} else if summary != nil {
+		log.Info().
+			Int("total_plays", summary.TotalPlays).
+			Int("distinct_played_tracks", summary.DistinctPlayedTracks).
+			Int("distinct_played_artists", summary.DistinctPlayedArtists).
+			Float64("replay_affinity_score", summary.ReplayAffinityScore).
+			Float64("novelty_tolerance_score", summary.NoveltyToleranceScore).
+			Msg("Updated taste profile")
+	}
 
 	if err := s.pgClient.SetLastSync(ctx, time.Now()); err != nil {
 		log.Error().Err(err).Msg("Failed to update last sync")

@@ -26,6 +26,19 @@ const (
 	ProviderLocal     = "local"
 	ProviderAudioMuse = "audiomuse"
 	ProviderHybrid    = "hybrid"
+
+	scoreListeningAffinity = "listening_affinity"
+	scoreDiversityPenalty  = "diversity_penalty"
+	scoreModeAdjustment    = "mode_adjustment"
+	scoreMoodAdjustment    = "mood_adjustment"
+)
+
+const (
+	ModeFamiliar    = "familiar"
+	ModeAdjacent    = "adjacent"
+	ModeDeepCut     = "deep-cut"
+	ModeSurprise    = "surprise"
+	ModeLibraryOnly = "library-only"
 )
 
 type repository interface {
@@ -35,6 +48,12 @@ type repository interface {
 	FindSimilarTracksByEmbedding(ctx context.Context, embedding pgvector.Vector, limit int, start, end *time.Time) ([]db.SimilarTrack, error)
 	GetArtistByName(ctx context.Context, name string) (*db.Artist, error)
 	FindSimilarArtists(ctx context.Context, embedding pgvector.Vector, limit int) ([]db.Artist, error)
+	GetTasteProfileSummary(ctx context.Context) (*db.TasteProfileSummary, error)
+	GetArtistTasteFeatures(ctx context.Context, artistNames []string) (map[string]db.TasteProfileArtistFeature, error)
+	GetAlbumTasteFeatures(ctx context.Context, albumIDs []string) (map[string]db.TasteProfileAlbumFeature, error)
+	GetListeningContext(ctx context.Context) (*db.ListeningContext, error)
+	UpsertListeningContext(ctx context.Context, mode, mood string, expiresAt *time.Time, source string) (*db.ListeningContext, error)
+	DeleteListeningContext(ctx context.Context) error
 }
 
 type Config struct {
@@ -65,27 +84,36 @@ type Service struct {
 }
 
 type TrackRequest struct {
-	SeedTrackID       string `json:"seedTrackId"`
-	SeedTrackTitle    string `json:"seedTrackTitle"`
-	SeedArtistName    string `json:"seedArtistName"`
-	Provider          string `json:"provider"`
-	Limit             int    `json:"limit"`
-	ExcludeRecentDays int    `json:"excludeRecentDays"`
-	ExcludeSeedArtist bool   `json:"excludeSeedArtist"`
+	SeedTrackID         string `json:"seedTrackId"`
+	SeedTrackTitle      string `json:"seedTrackTitle"`
+	SeedArtistName      string `json:"seedArtistName"`
+	Provider            string `json:"provider"`
+	Limit               int    `json:"limit"`
+	ExcludeRecentDays   int    `json:"excludeRecentDays"`
+	ExcludeSeedArtist   bool   `json:"excludeSeedArtist"`
+	Mode                string `json:"mode,omitempty"`
+	Mood                string `json:"mood,omitempty"`
+	IgnoreStoredContext bool   `json:"ignoreStoredContext,omitempty"`
 }
 
 type ArtistRequest struct {
-	SeedArtistName string `json:"seedArtistName"`
-	Provider       string `json:"provider"`
-	Limit          int    `json:"limit"`
+	SeedArtistName      string `json:"seedArtistName"`
+	Provider            string `json:"provider"`
+	Limit               int    `json:"limit"`
+	Mode                string `json:"mode,omitempty"`
+	Mood                string `json:"mood,omitempty"`
+	IgnoreStoredContext bool   `json:"ignoreStoredContext,omitempty"`
 }
 
 type ArtistSongsRequest struct {
-	SeedArtistName    string `json:"seedArtistName"`
-	Provider          string `json:"provider"`
-	Limit             int    `json:"limit"`
-	ExcludeRecentDays int    `json:"excludeRecentDays"`
-	ExcludeSeedArtist bool   `json:"excludeSeedArtist"`
+	SeedArtistName      string `json:"seedArtistName"`
+	Provider            string `json:"provider"`
+	Limit               int    `json:"limit"`
+	ExcludeRecentDays   int    `json:"excludeRecentDays"`
+	ExcludeSeedArtist   bool   `json:"excludeSeedArtist"`
+	Mode                string `json:"mode,omitempty"`
+	Mood                string `json:"mood,omitempty"`
+	IgnoreStoredContext bool   `json:"ignoreStoredContext,omitempty"`
 }
 
 type TrackSeed struct {
@@ -139,6 +167,14 @@ type ArtistSongsResponse struct {
 	Results  []TrackResult `json:"results"`
 }
 
+type ListeningContext struct {
+	Mode      string     `json:"mode"`
+	Mood      string     `json:"mood,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	UpdatedAt time.Time  `json:"updatedAt"`
+	Source    string     `json:"source,omitempty"`
+}
+
 type Health struct {
 	DefaultProvider         string   `json:"defaultProvider"`
 	AudioMuseConfigured     bool     `json:"audioMuseConfigured"`
@@ -170,6 +206,31 @@ type bootstrapState struct {
 	libraryState string
 	lastError    string
 	lastTask     string
+}
+
+type trackRerankContext struct {
+	summary        *db.TasteProfileSummary
+	artistFeatures map[string]db.TasteProfileArtistFeature
+	albumFeatures  map[string]db.TasteProfileAlbumFeature
+}
+
+type artistRerankContext struct {
+	summary        *db.TasteProfileSummary
+	artistFeatures map[string]db.TasteProfileArtistFeature
+}
+
+type resolvedListeningContext struct {
+	Mode      string
+	Mood      string
+	ExpiresAt *time.Time
+	UpdatedAt time.Time
+	Source    string
+}
+
+type moodProfile struct {
+	familiarityBias float64
+	noveltyBias     float64
+	diversityBias   float64
 }
 
 type audioMuseTaskSummary struct {
@@ -260,11 +321,16 @@ func (s *Service) SimilarTracks(ctx context.Context, req TrackRequest) (TrackRes
 	if err != nil {
 		return TrackResponse{}, err
 	}
+	listeningContext, err := s.resolveListeningContext(ctx, req.Mode, req.Mood, defaultTrackMode(), req.IgnoreStoredContext)
+	if err != nil {
+		return TrackResponse{}, err
+	}
 	provider := s.resolveProvider(req.Provider)
 	results, providerUsed, err := s.fetchTrackResults(ctx, seed, req, provider)
 	if err != nil {
 		return TrackResponse{}, err
 	}
+	results = s.rerankTrackCandidates(ctx, seed.ArtistName, results, listeningContext)
 	return TrackResponse{
 		Provider: providerUsed,
 		Seed: TrackSeed{
@@ -281,11 +347,16 @@ func (s *Service) SimilarArtists(ctx context.Context, req ArtistRequest) (Artist
 	if seedName == "" {
 		return ArtistResponse{}, fmt.Errorf("seedArtistName is required")
 	}
+	listeningContext, err := s.resolveListeningContext(ctx, req.Mode, req.Mood, defaultArtistMode(), req.IgnoreStoredContext)
+	if err != nil {
+		return ArtistResponse{}, err
+	}
 	provider := s.resolveProvider(req.Provider)
 	results, providerUsed, err := s.fetchArtistResults(ctx, seedName, clampLimit(req.Limit, 5, 50), provider)
 	if err != nil {
 		return ArtistResponse{}, err
 	}
+	results = s.rerankArtistCandidates(ctx, seedName, results, listeningContext)
 	return ArtistResponse{
 		Provider: providerUsed,
 		Seed:     ArtistSeed{Name: seedName},
@@ -298,16 +369,62 @@ func (s *Service) SimilarSongsByArtist(ctx context.Context, req ArtistSongsReque
 	if seedName == "" {
 		return ArtistSongsResponse{}, fmt.Errorf("seedArtistName is required")
 	}
+	listeningContext, err := s.resolveListeningContext(ctx, req.Mode, req.Mood, defaultArtistSongsMode(), req.IgnoreStoredContext)
+	if err != nil {
+		return ArtistSongsResponse{}, err
+	}
 	provider := s.resolveProvider(req.Provider)
 	results, providerUsed, err := s.fetchTracksByArtist(ctx, seedName, req, provider)
 	if err != nil {
 		return ArtistSongsResponse{}, err
 	}
+	results = s.rerankTrackCandidates(ctx, seedName, results, listeningContext)
 	return ArtistSongsResponse{
 		Provider: providerUsed,
 		Seed:     ArtistSeed{Name: seedName},
 		Results:  results,
 	}, nil
+}
+
+func (s *Service) GetListeningContext(ctx context.Context) (*ListeningContext, error) {
+	item, err := s.repo.GetListeningContext(ctx)
+	if err != nil || item == nil {
+		return nil, err
+	}
+	return &ListeningContext{
+		Mode:      normalizeMode(item.Mode),
+		Mood:      strings.TrimSpace(item.Mood),
+		ExpiresAt: item.ExpiresAt,
+		UpdatedAt: item.UpdatedAt,
+		Source:    strings.TrimSpace(item.Source),
+	}, nil
+}
+
+func (s *Service) SetListeningContext(ctx context.Context, mode, mood string, ttl time.Duration, source string) (*ListeningContext, error) {
+	mode = normalizeMode(mode)
+	if mode == "" {
+		return nil, fmt.Errorf("mode is required")
+	}
+	var expiresAt *time.Time
+	if ttl > 0 {
+		t := s.now().Add(ttl)
+		expiresAt = &t
+	}
+	item, err := s.repo.UpsertListeningContext(ctx, mode, strings.TrimSpace(mood), expiresAt, strings.TrimSpace(source))
+	if err != nil {
+		return nil, err
+	}
+	return &ListeningContext{
+		Mode:      item.Mode,
+		Mood:      item.Mood,
+		ExpiresAt: item.ExpiresAt,
+		UpdatedAt: item.UpdatedAt,
+		Source:    item.Source,
+	}, nil
+}
+
+func (s *Service) DeleteListeningContext(ctx context.Context) error {
+	return s.repo.DeleteListeningContext(ctx)
 }
 
 func (s *Service) Health(ctx context.Context) Health {
@@ -902,6 +1019,422 @@ func (s *Service) mergeArtistResults(seedName string, local []ArtistResult, audi
 	return trimArtistResults(results, limit)
 }
 
+func (s *Service) rerankTrackCandidates(ctx context.Context, seedArtist string, results []TrackResult, listeningContext resolvedListeningContext) []TrackResult {
+	if len(results) == 0 {
+		return results
+	}
+	rerankCtx, err := s.loadTrackRerankContext(ctx, results)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to load taste-profile context for track reranking")
+		return results
+	}
+
+	preliminary := make([]TrackResult, len(results))
+	for i, item := range results {
+		preliminary[i] = item
+		if preliminary[i].SourceScores == nil {
+			preliminary[i].SourceScores = map[string]float64{}
+		}
+		affinity := s.trackListeningAffinity(preliminary[i], rerankCtx)
+		modeAdjustment := s.trackModeAdjustment(preliminary[i], rerankCtx, listeningContext)
+		moodAdjustment := s.trackMoodAdjustment(preliminary[i], rerankCtx, listeningContext)
+		preliminary[i].SourceScores[scoreListeningAffinity] = affinity
+		preliminary[i].SourceScores[scoreModeAdjustment] = modeAdjustment
+		preliminary[i].SourceScores[scoreMoodAdjustment] = moodAdjustment
+		preliminary[i].Score = clampScore(
+			s.trackBlendWeights(listeningContext).base*preliminary[i].Score +
+				s.trackBlendWeights(listeningContext).affinity*affinity +
+				modeAdjustment +
+				moodAdjustment,
+		)
+	}
+	sort.SliceStable(preliminary, func(i, j int) bool {
+		if preliminary[i].Score == preliminary[j].Score {
+			if preliminary[i].ArtistName == preliminary[j].ArtistName {
+				return preliminary[i].Title < preliminary[j].Title
+			}
+			return preliminary[i].ArtistName < preliminary[j].ArtistName
+		}
+		return preliminary[i].Score > preliminary[j].Score
+	})
+
+	seedArtistKey := normalizeKey(seedArtist)
+	artistSeen := make(map[string]int, len(preliminary))
+	albumSeen := make(map[string]int, len(preliminary))
+	out := make([]TrackResult, 0, len(preliminary))
+	for _, item := range preliminary {
+		penalty := trackDiversityPenalty(item, seedArtistKey, artistSeen, albumSeen, listeningContext)
+		item.SourceScores[scoreDiversityPenalty] = penalty
+		item.Score = clampScore(item.Score - penalty)
+		out = append(out, item)
+		artistSeen[normalizeKey(item.ArtistName)]++
+		if albumID := strings.TrimSpace(item.AlbumID); albumID != "" {
+			albumSeen[albumID]++
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			if out[i].ArtistName == out[j].ArtistName {
+				return out[i].Title < out[j].Title
+			}
+			return out[i].ArtistName < out[j].ArtistName
+		}
+		return out[i].Score > out[j].Score
+	})
+	return out
+}
+
+func (s *Service) rerankArtistCandidates(ctx context.Context, seedArtist string, results []ArtistResult, listeningContext resolvedListeningContext) []ArtistResult {
+	if len(results) == 0 {
+		return results
+	}
+	rerankCtx, err := s.loadArtistRerankContext(ctx, results)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to load taste-profile context for artist reranking")
+		return results
+	}
+
+	seedKey := normalizeKey(seedArtist)
+	out := make([]ArtistResult, 0, len(results))
+	for _, item := range results {
+		if normalizeKey(item.Name) == seedKey {
+			continue
+		}
+		if item.SourceScores == nil {
+			item.SourceScores = map[string]float64{}
+		}
+		affinity := s.artistListeningAffinity(item, rerankCtx)
+		modeAdjustment := s.artistModeAdjustment(item, rerankCtx, listeningContext)
+		moodAdjustment := s.artistMoodAdjustment(item, rerankCtx, listeningContext)
+		item.SourceScores[scoreListeningAffinity] = affinity
+		item.SourceScores[scoreModeAdjustment] = modeAdjustment
+		item.SourceScores[scoreMoodAdjustment] = moodAdjustment
+		item.Score = clampScore(
+			s.artistBlendWeights(listeningContext).base*item.Score +
+				s.artistBlendWeights(listeningContext).affinity*affinity +
+				modeAdjustment +
+				moodAdjustment,
+		)
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Score > out[j].Score
+	})
+	return out
+}
+
+func (s *Service) loadTrackRerankContext(ctx context.Context, results []TrackResult) (trackRerankContext, error) {
+	summary, err := s.repo.GetTasteProfileSummary(ctx)
+	if err != nil {
+		return trackRerankContext{}, err
+	}
+	artistNames := make([]string, 0, len(results))
+	albumIDs := make([]string, 0, len(results))
+	for _, item := range results {
+		artistNames = append(artistNames, item.ArtistName)
+		if strings.TrimSpace(item.AlbumID) != "" {
+			albumIDs = append(albumIDs, item.AlbumID)
+		}
+	}
+	artistFeatures, err := s.repo.GetArtistTasteFeatures(ctx, artistNames)
+	if err != nil {
+		return trackRerankContext{}, err
+	}
+	albumFeatures, err := s.repo.GetAlbumTasteFeatures(ctx, albumIDs)
+	if err != nil {
+		return trackRerankContext{}, err
+	}
+	return trackRerankContext{
+		summary:        summary,
+		artistFeatures: artistFeatures,
+		albumFeatures:  albumFeatures,
+	}, nil
+}
+
+func (s *Service) loadArtistRerankContext(ctx context.Context, results []ArtistResult) (artistRerankContext, error) {
+	summary, err := s.repo.GetTasteProfileSummary(ctx)
+	if err != nil {
+		return artistRerankContext{}, err
+	}
+	artistNames := make([]string, 0, len(results))
+	for _, item := range results {
+		artistNames = append(artistNames, item.Name)
+	}
+	artistFeatures, err := s.repo.GetArtistTasteFeatures(ctx, artistNames)
+	if err != nil {
+		return artistRerankContext{}, err
+	}
+	return artistRerankContext{
+		summary:        summary,
+		artistFeatures: artistFeatures,
+	}, nil
+}
+
+func (s *Service) resolveListeningContext(ctx context.Context, explicitMode, explicitMood, defaultMode string, ignoreStored bool) (resolvedListeningContext, error) {
+	active, err := s.repo.GetListeningContext(ctx)
+	if err != nil {
+		return resolvedListeningContext{}, err
+	}
+
+	resolved := resolvedListeningContext{
+		Mode: defaultMode,
+	}
+	if active != nil && !ignoreStored {
+		resolved.Mode = normalizeMode(active.Mode)
+		if resolved.Mode == "" {
+			resolved.Mode = defaultMode
+		}
+		resolved.Mood = strings.TrimSpace(active.Mood)
+		resolved.ExpiresAt = active.ExpiresAt
+		resolved.UpdatedAt = active.UpdatedAt
+		resolved.Source = strings.TrimSpace(active.Source)
+	}
+	if mode := normalizeMode(explicitMode); mode != "" {
+		resolved.Mode = mode
+	}
+	if mood := strings.TrimSpace(explicitMood); mood != "" {
+		resolved.Mood = mood
+	}
+	if resolved.Mode == "" {
+		resolved.Mode = defaultMode
+	}
+	return resolved, nil
+}
+
+func defaultTrackMode() string {
+	return ModeAdjacent
+}
+
+func defaultArtistMode() string {
+	return ModeAdjacent
+}
+
+func defaultArtistSongsMode() string {
+	return ModeFamiliar
+}
+
+func normalizeMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case ModeFamiliar:
+		return ModeFamiliar
+	case ModeAdjacent, "":
+		return strings.TrimSpace(strings.ToLower(raw))
+	case "deepcut", "deep_cut", "deep cut", ModeDeepCut:
+		return ModeDeepCut
+	case ModeSurprise:
+		return ModeSurprise
+	case "library_only", "library only", ModeLibraryOnly:
+		return ModeLibraryOnly
+	default:
+		return ""
+	}
+}
+
+func parseMoodProfile(raw string) moodProfile {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		return moodProfile{}
+	}
+	profile := moodProfile{}
+	switch {
+	case strings.Contains(value, "night"), strings.Contains(value, "dark"), strings.Contains(value, "late"), strings.Contains(value, "moody"), strings.Contains(value, "melanch"), strings.Contains(value, "dream"):
+		profile.noveltyBias += 0.015
+		profile.diversityBias += 0.01
+	case strings.Contains(value, "warm"), strings.Contains(value, "soft"), strings.Contains(value, "gentle"), strings.Contains(value, "calm"), strings.Contains(value, "cozy"):
+		profile.familiarityBias += 0.02
+		profile.diversityBias -= 0.01
+	case strings.Contains(value, "ener"), strings.Contains(value, "drive"), strings.Contains(value, "bright"), strings.Contains(value, "lift"), strings.Contains(value, "focus"):
+		profile.familiarityBias += 0.01
+		profile.noveltyBias += 0.01
+	case strings.Contains(value, "weird"), strings.Contains(value, "advent"), strings.Contains(value, "surpris"), strings.Contains(value, "wild"), strings.Contains(value, "explor"):
+		profile.noveltyBias += 0.03
+		profile.diversityBias += 0.02
+	}
+	return profile
+}
+
+type blendWeights struct {
+	base     float64
+	affinity float64
+}
+
+func (s *Service) trackBlendWeights(listeningContext resolvedListeningContext) blendWeights {
+	switch listeningContext.Mode {
+	case ModeFamiliar:
+		return blendWeights{base: 0.70, affinity: 0.30}
+	case ModeDeepCut:
+		return blendWeights{base: 0.72, affinity: 0.12}
+	case ModeSurprise:
+		return blendWeights{base: 0.74, affinity: 0.06}
+	case ModeLibraryOnly:
+		return blendWeights{base: 0.76, affinity: 0.24}
+	default:
+		return blendWeights{base: 0.78, affinity: 0.22}
+	}
+}
+
+func (s *Service) artistBlendWeights(listeningContext resolvedListeningContext) blendWeights {
+	switch listeningContext.Mode {
+	case ModeFamiliar:
+		return blendWeights{base: 0.68, affinity: 0.32}
+	case ModeDeepCut:
+		return blendWeights{base: 0.70, affinity: 0.12}
+	case ModeSurprise:
+		return blendWeights{base: 0.72, affinity: 0.06}
+	case ModeLibraryOnly:
+		return blendWeights{base: 0.78, affinity: 0.22}
+	default:
+		return blendWeights{base: 0.80, affinity: 0.20}
+	}
+}
+
+func (s *Service) trackModeAdjustment(result TrackResult, rerankCtx trackRerankContext, listeningContext resolvedListeningContext) float64 {
+	artistFeature := rerankCtx.artistFeatures[normalizeKey(result.ArtistName)]
+	albumFeature := rerankCtx.albumFeatures[strings.TrimSpace(result.AlbumID)]
+	familiarity := clampScore(artistFeature.FamiliarityScore)
+	overexposure := clampScore(albumFeature.OverexposureScore)
+	playCount := clampScore(float64(result.PlayCount) / 25.0)
+
+	switch listeningContext.Mode {
+	case ModeFamiliar:
+		return clampSignedScore(0.05*familiarity + 0.02*playCount - 0.02*overexposure)
+	case ModeDeepCut:
+		return clampSignedScore(0.07*(1-familiarity) + 0.04*(1-playCount) - 0.05*familiarity - 0.01*overexposure)
+	case ModeSurprise:
+		return clampSignedScore(0.10*(1-familiarity) + 0.05*(1-playCount) - 0.09*familiarity - 0.02*overexposure)
+	default:
+		return 0
+	}
+}
+
+func (s *Service) artistModeAdjustment(result ArtistResult, rerankCtx artistRerankContext, listeningContext resolvedListeningContext) float64 {
+	artistFeature := rerankCtx.artistFeatures[normalizeKey(result.Name)]
+	familiarity := clampScore(artistFeature.FamiliarityScore)
+	playCount := clampScore(float64(result.PlayCount) / 25.0)
+
+	switch listeningContext.Mode {
+	case ModeFamiliar:
+		return clampSignedScore(0.05*familiarity + 0.02*playCount)
+	case ModeDeepCut:
+		return clampSignedScore(0.07*(1-familiarity) + 0.04*(1-playCount) - 0.05*familiarity)
+	case ModeSurprise:
+		return clampSignedScore(0.10*(1-familiarity) + 0.05*(1-playCount) - 0.09*familiarity)
+	default:
+		return 0
+	}
+}
+
+func (s *Service) trackMoodAdjustment(result TrackResult, rerankCtx trackRerankContext, listeningContext resolvedListeningContext) float64 {
+	profile := parseMoodProfile(listeningContext.Mood)
+	if profile == (moodProfile{}) {
+		return 0
+	}
+	artistFeature := rerankCtx.artistFeatures[normalizeKey(result.ArtistName)]
+	albumFeature := rerankCtx.albumFeatures[strings.TrimSpace(result.AlbumID)]
+	familiarity := clampScore(artistFeature.FamiliarityScore)
+	overexposure := clampScore(albumFeature.OverexposureScore)
+	return clampSignedScore(profile.familiarityBias*familiarity + profile.noveltyBias*(1-familiarity) + profile.diversityBias*(1-overexposure))
+}
+
+func (s *Service) artistMoodAdjustment(result ArtistResult, rerankCtx artistRerankContext, listeningContext resolvedListeningContext) float64 {
+	profile := parseMoodProfile(listeningContext.Mood)
+	if profile == (moodProfile{}) {
+		return 0
+	}
+	artistFeature := rerankCtx.artistFeatures[normalizeKey(result.Name)]
+	familiarity := clampScore(artistFeature.FamiliarityScore)
+	return clampSignedScore(profile.familiarityBias*familiarity + profile.noveltyBias*(1-familiarity) + profile.diversityBias*(1-familiarity))
+}
+
+func (s *Service) trackListeningAffinity(result TrackResult, rerankCtx trackRerankContext) float64 {
+	artistFeature := rerankCtx.artistFeatures[normalizeKey(result.ArtistName)]
+	albumFeature := rerankCtx.albumFeatures[strings.TrimSpace(result.AlbumID)]
+
+	familiarity := clampScore(artistFeature.FamiliarityScore)
+	fatigue := clampScore(artistFeature.FatigueScore)
+	overexposure := clampScore(albumFeature.OverexposureScore)
+	rating := clampScore(float64(result.Rating) / 5.0)
+	playCount := clampScore(float64(result.PlayCount) / 25.0)
+
+	replayPreference := 0.0
+	noveltyPreference := 0.0
+	if rerankCtx.summary != nil {
+		replayPreference = clampScore(rerankCtx.summary.ReplayAffinityScore * ((0.65 * familiarity) + (0.35 * playCount)))
+		noveltyPreference = clampScore(rerankCtx.summary.NoveltyToleranceScore * (1 - familiarity))
+	}
+
+	return clampScore(
+		(0.34 * familiarity) +
+			(0.14 * rating) +
+			(0.14 * playCount) +
+			(0.14 * replayPreference) +
+			(0.10 * noveltyPreference) +
+			(0.08 * (1 - fatigue)) +
+			(0.06 * (1 - overexposure)),
+	)
+}
+
+func (s *Service) artistListeningAffinity(result ArtistResult, rerankCtx artistRerankContext) float64 {
+	artistFeature := rerankCtx.artistFeatures[normalizeKey(result.Name)]
+
+	familiarity := clampScore(artistFeature.FamiliarityScore)
+	fatigue := clampScore(artistFeature.FatigueScore)
+	rating := clampScore(float64(result.Rating) / 5.0)
+	playCount := clampScore(float64(result.PlayCount) / 25.0)
+
+	replayPreference := 0.0
+	noveltyPreference := 0.0
+	if rerankCtx.summary != nil {
+		replayPreference = clampScore(rerankCtx.summary.ReplayAffinityScore * ((0.70 * familiarity) + (0.30 * playCount)))
+		noveltyPreference = clampScore(rerankCtx.summary.NoveltyToleranceScore * (1 - familiarity))
+	}
+
+	return clampScore(
+		(0.42 * familiarity) +
+			(0.14 * rating) +
+			(0.14 * playCount) +
+			(0.15 * replayPreference) +
+			(0.07 * noveltyPreference) +
+			(0.08 * (1 - fatigue)),
+	)
+}
+
+func trackDiversityPenalty(result TrackResult, seedArtistKey string, artistSeen, albumSeen map[string]int, listeningContext resolvedListeningContext) float64 {
+	artistKey := normalizeKey(result.ArtistName)
+	penalty := 0.0
+	weight := 1.0
+	switch listeningContext.Mode {
+	case ModeFamiliar:
+		weight = 0.65
+	case ModeDeepCut:
+		weight = 1.2
+	case ModeSurprise:
+		weight = 1.45
+	}
+	profile := parseMoodProfile(listeningContext.Mood)
+	weight += profile.diversityBias
+	if weight < 0.4 {
+		weight = 0.4
+	}
+	if artistSeen[artistKey] > 0 {
+		penalty += 0.07 * float64(artistSeen[artistKey]) * weight
+	}
+	if albumID := strings.TrimSpace(result.AlbumID); albumID != "" && albumSeen[albumID] > 0 {
+		penalty += 0.05 * float64(albumSeen[albumID]) * weight
+	}
+	if seedArtistKey != "" && artistKey == seedArtistKey {
+		sameArtistPenalty := 0.03
+		if listeningContext.Mode == ModeFamiliar {
+			sameArtistPenalty = 0.015
+		}
+		penalty += sameArtistPenalty
+	}
+	return clampScore(penalty)
+}
+
 func (c *audioMuseClient) SimilarTracks(ctx context.Context, repo repository, seed *db.Track, req TrackRequest, limit int) ([]TrackResult, error) {
 	payload := map[string]interface{}{
 		"limit":               clampLimit(limit, 10, 200),
@@ -1401,6 +1934,16 @@ func clampScore(score float64) float64 {
 	}
 	if score > 1 {
 		return 1
+	}
+	return score
+}
+
+func clampSignedScore(score float64) float64 {
+	if score < -0.15 {
+		return -0.15
+	}
+	if score > 0.15 {
+		return 0.15
 	}
 	return score
 }

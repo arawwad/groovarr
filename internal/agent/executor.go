@@ -371,7 +371,10 @@ var toolResultRenderers = map[string]toolResultRenderer{
 	"startArtistRemovalPreview":                renderStartArtistRemovalPreviewResult,
 	"startDiscoveredAlbumsApplyPreview":        renderStartDiscoveredAlbumsApplyPreviewResult,
 	"startLidarrCleanupApplyPreview":           renderStartLidarrCleanupApplyPreviewResult,
+	"startPlaylistCreatePreview":               renderStartPlaylistCreatePreviewResult,
 	"startPlaylistAppendPreview":               renderStartPlaylistAppendPreviewResult,
+	"startPlaylistRefreshPreview":              renderStartPlaylistRefreshPreviewResult,
+	"startPlaylistRepairPreview":               renderStartPlaylistRepairPreviewResult,
 }
 
 func renderArtistLibraryStatsResult(args map[string]interface{}, raw string) (string, bool) {
@@ -1130,8 +1133,20 @@ func renderStartLidarrCleanupApplyPreviewResult(_ map[string]interface{}, raw st
 	return renderPreviewResponse(raw, "startLidarrCleanupApplyPreview")
 }
 
+func renderStartPlaylistCreatePreviewResult(_ map[string]interface{}, raw string) (string, bool) {
+	return renderPreviewResponse(raw, "startPlaylistCreatePreview")
+}
+
 func renderStartPlaylistAppendPreviewResult(_ map[string]interface{}, raw string) (string, bool) {
 	return renderPreviewResponse(raw, "startPlaylistAppendPreview")
+}
+
+func renderStartPlaylistRefreshPreviewResult(_ map[string]interface{}, raw string) (string, bool) {
+	return renderPreviewResponse(raw, "startPlaylistRefreshPreview")
+}
+
+func renderStartPlaylistRepairPreviewResult(_ map[string]interface{}, raw string) (string, bool) {
+	return renderPreviewResponse(raw, "startPlaylistRepairPreview")
 }
 
 func renderPreviewResponse(raw, field string) (string, bool) {

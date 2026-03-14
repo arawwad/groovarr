@@ -271,6 +271,19 @@ Expected:
 - response describes the plan
 - response includes `pendingAction`
 - `pendingAction.kind` is `playlist_create`
+- no hard settings should be required
+- the assistant should not ask for config-style options unless the request is genuinely too vague to satisfy
+
+### Playlist Chunk 1 Gate
+
+Before moving Phase 3 forward, these must pass together:
+- Playlist Append Preview
+- Playlist Create Preview
+- Pending Action Approve / Discard for playlist previews
+
+Interpretation:
+- this is the hard gate for conversational, zero-config playlist work
+- do not expand playlist scope until this gate is stable
 
 ### 10. Pending Action Approve / Discard
 
@@ -307,7 +320,80 @@ Expected:
 - discard clears it
 - unrelated later replies should not leak the old `pendingAction`
 
-### 11. Removal Preview
+### 11. Playlist Refresh Preview
+
+```bash
+curl -sS --json '{"message":"Refresh the playlist Melancholy Jazz","sessionId":"e2e-playlist-refresh"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- response describes a refresh preview or explains clearly why there is nothing safe to refresh
+- if a preview is available, response includes `pendingAction`
+- if a preview is available, `pendingAction.kind` is `playlist_refresh`
+- no hard settings should be required
+
+Clarification check:
+
+```bash
+curl -sS --json '{"message":"Refresh that playlist","sessionId":"e2e-playlist-refresh"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- asks which playlist to refresh
+- should not invent a playlist target
+
+### 12. Playlist Repair Preview
+
+```bash
+curl -sS --json '{"message":"Repair the playlist Melancholy Jazz","sessionId":"e2e-playlist-repair"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- response describes a repair preview or explains clearly why there is nothing obvious to repair
+- if a preview is available, response includes `pendingAction`
+- if a preview is available, `pendingAction.kind` is `playlist_repair`
+- no hard settings should be required
+
+Clarification check:
+
+```bash
+curl -sS --json '{"message":"Repair that playlist","sessionId":"e2e-playlist-repair"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- asks which playlist to repair
+- should not invent a playlist target
+
+### Conversational Playlist Clarification Check
+
+Append without target:
+
+```bash
+curl -sS --json '{"message":"Add five colder tracks to that playlist","sessionId":"e2e-playlist-clarify"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- asks a concise clarifying question about which playlist to update
+- should not invent a playlist target
+
+Underspecified create:
+
+```bash
+curl -sS --json '{"message":"Make me a playlist","sessionId":"e2e-playlist-clarify"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- either asks one concise clarifying question
+- or applies a clearly defensible zero-config default
+- should not dump configuration options at the user
+
+### 13. Removal Preview
 
 ```bash
 curl -sS --json '{"message":"Remove Warpaint from my library","sessionId":"e2e-remove"}' \
@@ -318,7 +404,7 @@ Expected:
 - safe preview flow only
 - if not found in Lidarr, responds clearly without a destructive action
 
-### 12. Badly Rated Albums
+### 14. Badly Rated Albums
 
 Read-only query:
 

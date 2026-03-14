@@ -109,7 +109,7 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 
 func TestBuildSystemPromptIsCompact(t *testing.T) {
 	got := buildSystemPrompt()
-	if len(got) > 15000 {
+	if len(got) > 16000 {
 		t.Fatalf("buildSystemPrompt() too long: %d chars", len(got))
 	}
 }
@@ -189,6 +189,42 @@ func TestRenderToolResultPlaylistAppendPreviewResponse(t *testing.T) {
 		t.Fatal("renderToolResult() did not render playlist append preview response")
 	}
 	want := `I prepared 2 direct addition(s) and 1 queued addition(s) for "Late Night". Use the approval buttons if you want me to apply them.`
+	if got != want {
+		t.Fatalf("renderToolResult() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderToolResultPlaylistCreatePreviewResponse(t *testing.T) {
+	raw := `{"data":{"startPlaylistCreatePreview":{"response":"I prepared 12 direct track(s) and 2 queued track(s) for \"Late Nights\". Use the approval buttons if you want me to create or update it."}}}`
+	got, ok := renderToolResult("startPlaylistCreatePreview", nil, raw)
+	if !ok {
+		t.Fatal("renderToolResult() did not render playlist create preview response")
+	}
+	want := `I prepared 12 direct track(s) and 2 queued track(s) for "Late Nights". Use the approval buttons if you want me to create or update it.`
+	if got != want {
+		t.Fatalf("renderToolResult() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderToolResultPlaylistRefreshPreviewResponse(t *testing.T) {
+	raw := `{"data":{"startPlaylistRefreshPreview":{"response":"I prepared 4 safe replacement(s) for \"Late Nights\". Use the approval buttons if you want me to refresh it."}}}`
+	got, ok := renderToolResult("startPlaylistRefreshPreview", nil, raw)
+	if !ok {
+		t.Fatal("renderToolResult() did not render playlist refresh preview response")
+	}
+	want := `I prepared 4 safe replacement(s) for "Late Nights". Use the approval buttons if you want me to refresh it.`
+	if got != want {
+		t.Fatalf("renderToolResult() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderToolResultPlaylistRepairPreviewResponse(t *testing.T) {
+	raw := `{"data":{"startPlaylistRepairPreview":{"response":"I prepared 3 repair replacement(s) for \"Late Nights\". Use the approval buttons if you want me to apply them."}}}`
+	got, ok := renderToolResult("startPlaylistRepairPreview", nil, raw)
+	if !ok {
+		t.Fatal("renderToolResult() did not render playlist repair preview response")
+	}
+	want := `I prepared 3 repair replacement(s) for "Late Nights". Use the approval buttons if you want me to apply them.`
 	if got != want {
 		t.Fatalf("renderToolResult() = %q, want %q", got, want)
 	}

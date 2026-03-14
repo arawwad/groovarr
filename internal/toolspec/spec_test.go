@@ -24,4 +24,13 @@ func TestPromptCatalogUsesSharedFilterSchemaStrings(t *testing.T) {
 	if got := byName["libraryFacetCounts"].Schema; got != requiredFieldFilterKeySchema(LibraryFacetCountsFilterKeys) {
 		t.Fatalf("libraryFacetCounts schema = %q", got)
 	}
+	if _, ok := byName["startPlaylistCreatePreview"]; !ok {
+		t.Fatal("startPlaylistCreatePreview missing from prompt catalog")
+	}
+	if _, ok := byName["startPlaylistRefreshPreview"]; !ok {
+		t.Fatal("startPlaylistRefreshPreview missing from prompt catalog")
+	}
+	if _, ok := byName["startPlaylistRepairPreview"]; !ok {
+		t.Fatal("startPlaylistRepairPreview missing from prompt catalog")
+	}
 }

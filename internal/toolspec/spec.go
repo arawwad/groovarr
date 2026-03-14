@@ -236,16 +236,14 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
-			Name:        "planDiscoverPlaylist",
-			Description: "Plan a new discovery playlist.",
-			UseWhen:     "The user wants a new playlist generated from a prompt.",
+			Name:        "startPlaylistCreatePreview",
+			Description: "Preview a new playlist.",
+			UseWhen:     "Default for playlist creation.",
 			Args: []ToolArgSpec{
 				{Name: "prompt", Type: "string", Required: true, Description: "Playlist request."},
-				{Name: "trackCount", Type: "number", Description: "Desired number of tracks."},
 				{Name: "playlistName", Type: "string", Description: "Optional playlist title."},
-				{Name: "personalized", Type: "boolean", Description: "Whether to tailor to the user's library."},
+				{Name: "trackCount", Type: "number", Description: "Desired number of tracks."},
 			},
-			Example: `{"action":"query","tool":"planDiscoverPlaylist","args":{"prompt":"melancholy jazz for late nights","trackCount":20}}`,
 		},
 		{
 			Name:        "resolvePlaylistTracks",
@@ -267,13 +265,30 @@ func PromptCatalog() []ToolSpec {
 		{
 			Name:        "startPlaylistAppendPreview",
 			Description: "Preview adding new tracks to an existing saved playlist.",
-			UseWhen:     "The user wants to update an existing playlist instead of creating a new one.",
+			UseWhen:     "Use when the user wants to add to an existing playlist.",
 			Args: []ToolArgSpec{
 				{Name: "playlistName", Type: "string", Required: true, Description: "Existing playlist name."},
 				{Name: "prompt", Type: "string", Required: true, Description: "What to add."},
 				{Name: "trackCount", Type: "number", Description: "Desired number of additions."},
 			},
 			Example: `{"action":"query","tool":"startPlaylistAppendPreview","args":{"playlistName":"Melancholy Jazz","prompt":"add five colder tracks","trackCount":5}}`,
+		},
+		{
+			Name:        "startPlaylistRefreshPreview",
+			Description: "Preview a playlist refresh.",
+			UseWhen:     "Use when the user wants to refresh a playlist.",
+			Args: []ToolArgSpec{
+				{Name: "playlistName", Type: "string", Required: true, Description: "Existing playlist name."},
+				{Name: "replaceCount", Type: "number", Description: "How many tracks to replace."},
+			},
+		},
+		{
+			Name:        "startPlaylistRepairPreview",
+			Description: "Preview a playlist repair.",
+			UseWhen:     "Use when the user asks to repair a playlist.",
+			Args: []ToolArgSpec{
+				{Name: "playlistName", Type: "string", Required: true, Description: "Existing playlist name."},
+			},
 		},
 		{
 			Name:        "navidromePlaylists",
