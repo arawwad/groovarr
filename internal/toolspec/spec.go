@@ -3,6 +3,7 @@ package toolspec
 import "strings"
 
 type ToolSpec struct {
+	Category    string
 	Name        string
 	Description string
 	UseWhen     string
@@ -17,6 +18,19 @@ type ToolArgSpec struct {
 	Required    bool
 	Description string
 }
+
+const (
+	CategoryLibraryBrowse    = "Library Browse"
+	CategoryListening        = "Listening"
+	CategoryLibraryAnalytics = "Library Analytics"
+	CategorySemanticSearch   = "Semantic Search"
+	CategoryDiscovery        = "Discovery"
+	CategoryPlaylistPlanning = "Playlist Planning"
+	CategoryPlaylistState    = "Playlist State"
+	CategoryPlaylistActions  = "Playlist Actions"
+	CategoryCleanup          = "Cleanup"
+	CategorySimilarity       = "Similarity"
+)
 
 var (
 	ArtistListeningStatsFilterKeys = []string{
@@ -53,12 +67,14 @@ func requiredFieldFilterKeySchema(keys []string) string {
 func PromptCatalog() []ToolSpec {
 	return []ToolSpec{
 		{
+			Category:    CategoryLibraryBrowse,
 			Name:        "libraryStats",
 			Description: "High-level counts for the user's library.",
 			UseWhen:     "The user asks for overall library totals or a broad overview.",
 			Example:     `{"action":"query","tool":"libraryStats","args":{}}`,
 		},
 		{
+			Category:    CategoryLibraryBrowse,
 			Name:        "artists",
 			Description: "List artists in the user's library.",
 			UseWhen:     "The user asks for artists in their library or top artists without advanced grouping.",
@@ -68,6 +84,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryLibraryBrowse,
 			Name:        "albums",
 			Description: "List albums in the user's library.",
 			UseWhen:     "Owned-album lists, album title lookups, or follow-ups like 'from those artists'. Not for song lookups or global best/top artist-discography requests unless library-limited.",
@@ -77,6 +94,8 @@ func PromptCatalog() []ToolSpec {
 				{Name: "queryText", Type: "string", Description: "Match album title or artist text for exact-lookups like 'do I have Dark Side of the Moon?'."},
 				{Name: "genre", Type: "string", Description: "Filter by genre."},
 				{Name: "year", Type: "number", Description: "Filter by release year."},
+				{Name: "minYear", Type: "number", Description: "Lower bound release year for decade/range follow-ups."},
+				{Name: "maxYear", Type: "number", Description: "Upper bound release year for decade/range follow-ups."},
 				{Name: "unplayed", Type: "boolean", Description: "Only unplayed albums."},
 				{Name: "notPlayedSince", Type: "string", Description: "ISO date or supported relative date phrase."},
 				{Name: "rating", Type: "number", Description: "Minimum rating filter."},
@@ -87,6 +106,7 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"albums","args":{"artistName":"Pink Floyd","limit":5}}`,
 		},
 		{
+			Category:    CategoryLibraryBrowse,
 			Name:        "tracks",
 			Description: "List tracks from the user's library and listening history.",
 			UseWhen:     "Track lists, most-played tracks, or song/title checks in the library, such as 'Do I have Heart-Shaped Box by Nirvana?'.",
@@ -103,6 +123,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryLibraryBrowse,
 			Name:        "badlyRatedAlbums",
 			Description: "Find albums in the user's library that contain any badly rated tracks.",
 			UseWhen:     "The user asks about disliked or badly rated albums, or albums containing 1-star or 2-star tracks.",
@@ -113,31 +134,34 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"badlyRatedAlbums","args":{"limit":20,"maxTrackDetails":3}}`,
 		},
 		{
+			Category:    CategoryListening,
 			Name:        "recentListeningSummary",
 			Description: "Summaries for a listening window with top tracks and artists heard.",
 			UseWhen:     "The user asks what they listened to in a recent period.",
 			Args: []ToolArgSpec{
-				{Name: "window", Type: "string", Description: "Named window such as last_week or last_month."},
-				{Name: "playedSince", Type: "string", Description: "Lower bound time."},
-				{Name: "playedUntil", Type: "string", Description: "Upper bound time."},
+				{Name: "window", Type: "string", Description: "Named window such as last_week or last_month. Do not combine with playedSince/playedUntil."},
+				{Name: "playedSince", Type: "string", Description: "Lower bound time. If set, playedUntil must also be set."},
+				{Name: "playedUntil", Type: "string", Description: "Upper bound time. If set, playedSince must also be set."},
 				{Name: "trackLimit", Type: "number", Description: "Top tracks to include."},
 				{Name: "artistLimit", Type: "number", Description: "Top artists to include."},
 			},
 			Example: `{"action":"query","tool":"recentListeningSummary","args":{"window":"last_month","trackLimit":10,"artistLimit":6}}`,
 		},
 		{
+			Category:    CategoryListening,
 			Name:        "artistListeningStats",
 			Description: "Artist-level listening stats over a time window.",
 			UseWhen:     "The user asks which artists they played most or least in a period.",
 			Schema:      filterKeySchema(ArtistListeningStatsFilterKeys),
 			Args: []ToolArgSpec{
 				{Name: "filter", Type: "object", Description: "Use only the allowed filter keys listed below."},
-				{Name: "sort", Type: "string", Description: "Sort order."},
+				{Name: "sort", Type: "string", Description: "Sort order: plays, recent, name, albums, total_plays."},
 				{Name: "limit", Type: "number", Description: "Maximum results."},
 			},
 			Example: `{"action":"query","tool":"artistListeningStats","args":{"filter":{"playedSince":"2026-02-10","playedUntil":"2026-03-10"},"sort":"plays","limit":10}}`,
 		},
 		{
+			Category:    CategoryLibraryAnalytics,
 			Name:        "artistLibraryStats",
 			Description: "Artist-level library composition stats.",
 			UseWhen:     "The user asks for grouped artist analytics about albums, ratings, library shape, or exact album counts for a specific artist rather than listening windows.",
@@ -150,6 +174,7 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"artistLibraryStats","args":{"filter":{"artistName":"Pink Floyd"},"sort":"albums","limit":5}}`,
 		},
 		{
+			Category:    CategoryLibraryAnalytics,
 			Name:        "albumLibraryStats",
 			Description: "Album-level library stats.",
 			UseWhen:     "The user asks for album counts, unplayed albums, neglected albums, or album stats inside their own library.",
@@ -161,6 +186,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryLibraryAnalytics,
 			Name:        "albumRelationshipStats",
 			Description: "Album stats that depend on artist-to-album relationships.",
 			UseWhen:     "The user asks for albums by artists with a certain number of albums or other artist-album relationship patterns.",
@@ -172,6 +198,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryLibraryAnalytics,
 			Name:        "libraryFacetCounts",
 			Description: "Facet counts such as genres, years, or decades.",
 			UseWhen:     "The user asks for distributions, breakdowns, or dominant categories in the library.",
@@ -184,6 +211,7 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"libraryFacetCounts","args":{"field":"genre","limit":10}}`,
 		},
 		{
+			Category:    CategorySemanticSearch,
 			Name:        "semanticTrackSearch",
 			Description: "Semantic search over tracks in the user's library.",
 			UseWhen:     "The user asks for tracks with a mood, vibe, or descriptive sound and wants matches from their own library.",
@@ -196,6 +224,18 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategorySemanticSearch,
+			Name:        "textToTrack",
+			Description: "Text-to-track search over the analyzed library.",
+			UseWhen:     "The user describes a sound, mood, or texture and wants library tracks that match it sonically.",
+			Args: []ToolArgSpec{
+				{Name: "queryText", Type: "string", Required: true, Description: "Text description of the sound or vibe."},
+				{Name: "limit", Type: "number", Description: "Maximum results."},
+			},
+			Example: `{"action":"query","tool":"textToTrack","args":{"queryText":"smoky nocturnal trip-hop","limit":8}}`,
+		},
+		{
+			Category:    CategorySemanticSearch,
 			Name:        "semanticAlbumSearch",
 			Description: "Semantic search over albums in the user's library.",
 			UseWhen:     "Use only for library-only vibe/scene recommendations or narrowing a prior library semantic album request.",
@@ -210,6 +250,7 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"semanticAlbumSearch","args":{"queryText":"melancholic dream pop","minYear":1990,"maxYear":1999,"limit":5}}`,
 		},
 		{
+			Category:    CategoryDiscovery,
 			Name:        "discoverAlbums",
 			Description: "Discover albums beyond the user's current library.",
 			UseWhen:     "Default recommendation tool for best, top, essential, mood, artist-discography, or 'like X but more Y' album requests unless the user explicitly wants only library-owned results.",
@@ -220,6 +261,7 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"discoverAlbums","args":{"query":"records like Talk Talk's Laughing Stock but warmer and more spacious","limit":5}}`,
 		},
 		{
+			Category:    CategoryDiscovery,
 			Name:        "matchDiscoveredAlbumsInLidarr",
 			Description: "Check whether previously discovered albums are available or matched in Lidarr.",
 			UseWhen:     "The user asks whether discovered albums are available, matched, or addable.",
@@ -228,6 +270,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryDiscovery,
 			Name:        "startDiscoveredAlbumsApplyPreview",
 			Description: "Prepare a preview for adding or monitoring discovered albums.",
 			UseWhen:     "The user is ready to act on discovered albums. Preview first rather than applying directly.",
@@ -236,6 +279,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistPlanning,
 			Name:        "startPlaylistCreatePreview",
 			Description: "Preview a new playlist.",
 			UseWhen:     "Default for playlist creation.",
@@ -246,6 +290,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistPlanning,
 			Name:        "resolvePlaylistTracks",
 			Description: "Resolve previously planned playlist candidates against available tracks.",
 			UseWhen:     "The user asks to resolve or inspect availability for a planned playlist.",
@@ -254,6 +299,17 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistPlanning,
+			Name:        "playlistPlanDetails",
+			Description: "Inspect the current planned playlist before creating or queueing anything.",
+			UseWhen:     "The user asks what is in the current plan, why tracks were chosen, or wants to inspect planned tracks before applying playlist actions.",
+			Args: []ToolArgSpec{
+				{Name: "selection", Type: "string", Description: `Optional subset of planned tracks, such as "all", "first 5", or part of an artist/title.`},
+			},
+			Example: `{"action":"query","tool":"playlistPlanDetails","args":{"selection":"first 5"}}`,
+		},
+		{
+			Category:    CategoryPlaylistPlanning,
 			Name:        "queueMissingPlaylistTracks",
 			Description: "Queue unresolved playlist tracks for download or fetching.",
 			UseWhen:     "The user explicitly asks to queue or download missing planned playlist tracks.",
@@ -263,6 +319,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistPlanning,
 			Name:        "startPlaylistAppendPreview",
 			Description: "Preview adding new tracks to an existing saved playlist.",
 			UseWhen:     "Use when the user wants to add to an existing playlist.",
@@ -274,6 +331,7 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"startPlaylistAppendPreview","args":{"playlistName":"Melancholy Jazz","prompt":"add five colder tracks","trackCount":5}}`,
 		},
 		{
+			Category:    CategoryPlaylistPlanning,
 			Name:        "startPlaylistRefreshPreview",
 			Description: "Preview a playlist refresh.",
 			UseWhen:     "Use when the user wants to refresh a playlist.",
@@ -283,6 +341,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistPlanning,
 			Name:        "startPlaylistRepairPreview",
 			Description: "Preview a playlist repair.",
 			UseWhen:     "Use when the user asks to repair a playlist.",
@@ -291,6 +350,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistState,
 			Name:        "navidromePlaylists",
 			Description: "List saved Navidrome playlists.",
 			UseWhen:     "The user asks what playlists exist or wants to search playlist names.",
@@ -300,27 +360,32 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistState,
 			Name:        "navidromePlaylist",
-			Description: "Inspect tracks in one saved Navidrome playlist.",
-			UseWhen:     "The user asks what is in a playlist.",
+			Description: "Inspect one saved Navidrome playlist, including saved tracks and any pending queued additions.",
+			UseWhen:     "Default playlist read tool when the user asks what is in a playlist or wants its current state.",
 			Args: []ToolArgSpec{
 				{Name: "playlistName", Type: "string", Description: "Playlist name."},
 				{Name: "playlistId", Type: "string", Description: "Playlist ID."},
 			},
 		},
 		{
-			Name:        "navidromePlaylistState",
-			Description: "Inspect a saved playlist plus pending queued additions.",
-			UseWhen:     "The user asks for the current state of a playlist including pending changes.",
+			Category:    CategoryPlaylistActions,
+			Name:        "addOrQueueTrackToNavidromePlaylist",
+			Description: "Add a track to a saved playlist now, or queue it if it is not available yet.",
+			UseWhen:     "Default when the user wants a specific track put into a playlist and does not care whether that means add-now or queue-for-fetch.",
 			Args: []ToolArgSpec{
 				{Name: "playlistName", Type: "string", Description: "Playlist name."},
 				{Name: "playlistId", Type: "string", Description: "Playlist ID."},
+				{Name: "artistName", Type: "string", Required: true, Description: "Track artist."},
+				{Name: "trackTitle", Type: "string", Required: true, Description: "Track title."},
 			},
 		},
 		{
+			Category:    CategoryPlaylistActions,
 			Name:        "addTrackToNavidromePlaylist",
 			Description: "Add a specific available track directly to a saved playlist.",
-			UseWhen:     "The user explicitly wants a known track added to a saved playlist right now.",
+			UseWhen:     "Low-level primitive for explicit immediate-add requests when availability is already known.",
 			Args: []ToolArgSpec{
 				{Name: "playlistName", Type: "string", Description: "Playlist name."},
 				{Name: "playlistId", Type: "string", Description: "Playlist ID."},
@@ -329,9 +394,10 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistActions,
 			Name:        "queueTrackForNavidromePlaylist",
 			Description: "Queue a specific missing track for a saved playlist.",
-			UseWhen:     "The user explicitly wants a specific track queued for a playlist.",
+			UseWhen:     "Low-level primitive for explicit queue-only requests instead of the smarter add-or-queue flow.",
 			Args: []ToolArgSpec{
 				{Name: "playlistName", Type: "string", Description: "Playlist name."},
 				{Name: "playlistId", Type: "string", Description: "Playlist ID."},
@@ -340,6 +406,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistActions,
 			Name:        "removePendingTracksFromNavidromePlaylist",
 			Description: "Clear pending queued tracks from a saved playlist.",
 			UseWhen:     "The user wants pending playlist additions removed before they are fulfilled.",
@@ -350,6 +417,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryPlaylistActions,
 			Name:        "removeTrackFromNavidromePlaylist",
 			Description: "Remove saved tracks from a Navidrome playlist.",
 			UseWhen:     "The user wants tracks removed from an existing playlist.",
@@ -360,6 +428,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryCleanup,
 			Name:        "lidarrCleanupCandidates",
 			Description: "Preview cleanup candidates from Lidarr-managed content.",
 			UseWhen:     "The user asks for cleanup candidates, duplicates, or stale content before applying cleanup.",
@@ -372,6 +441,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryCleanup,
 			Name:        "startLidarrCleanupApplyPreview",
 			Description: "Prepare a preview to apply a Lidarr cleanup action.",
 			UseWhen:     "The user is ready to act on cleanup candidates. Preview first.",
@@ -381,6 +451,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategoryCleanup,
 			Name:        "startArtistRemovalPreview",
 			Description: "Prepare a preview for removing an artist from the library.",
 			UseWhen:     "The user asks to remove an artist from their library. Preview first.",
@@ -390,6 +461,7 @@ func PromptCatalog() []ToolSpec {
 			Example: `{"action":"query","tool":"startArtistRemovalPreview","args":{"artistName":"Warpaint"}}`,
 		},
 		{
+			Category:    CategorySimilarity,
 			Name:        "similarArtists",
 			Description: "Find nearest artist matches already in the user's library.",
 			UseWhen:     "Only when the user explicitly asks for nearest library matches, not general recommendations.",
@@ -400,6 +472,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategorySimilarity,
 			Name:        "similarTracks",
 			Description: "Find nearest track matches already in the user's library.",
 			UseWhen:     "Only when the user explicitly asks for nearest library track matches or an instant-mix style seed expansion.",
@@ -414,6 +487,7 @@ func PromptCatalog() []ToolSpec {
 			},
 		},
 		{
+			Category:    CategorySimilarity,
 			Name:        "similarAlbums",
 			Description: "Find nearest album matches already in the user's library.",
 			UseWhen:     "Only when the user explicitly asks for nearest library matches, not general recommendations.",
@@ -421,6 +495,48 @@ func PromptCatalog() []ToolSpec {
 				{Name: "seedAlbum", Type: "string", Required: true, Description: "Reference album."},
 				{Name: "limit", Type: "number", Description: "Maximum results."},
 			},
+		},
+		{
+			Category:    CategorySimilarity,
+			Name:        "songPath",
+			Description: "Find a bridge path between two songs.",
+			UseWhen:     "The user explicitly wants a path, bridge, or gradual transition between two specific songs.",
+			Args: []ToolArgSpec{
+				{Name: "startTrackId", Type: "string", Description: "Start track ID when already known."},
+				{Name: "startTrackTitle", Type: "string", Description: "Exact start track title. Preserve user-provided qualifiers like live, demo, mix, remaster, or parenthetical subtitles."},
+				{Name: "startArtistName", Type: "string", Description: "Start track artist."},
+				{Name: "endTrackId", Type: "string", Description: "End track ID when already known."},
+				{Name: "endTrackTitle", Type: "string", Description: "Exact end track title. Preserve user-provided qualifiers like live, demo, mix, remaster, or parenthetical subtitles."},
+				{Name: "endArtistName", Type: "string", Description: "End track artist."},
+				{Name: "maxSteps", Type: "number", Description: "Requested path length cap."},
+				{Name: "keepExactSize", Type: "boolean", Description: "Request an exact path size when possible."},
+			},
+			Example: `{"action":"query","tool":"songPath","args":{"startTrackTitle":"Heart-Shaped Box (original Steve Albini 1993 mix)","startArtistName":"Nirvana","endTrackTitle":"All Apologies","endArtistName":"Nirvana","maxSteps":18}}`,
+		},
+		{
+			Category:    CategorySimilarity,
+			Name:        "describeTrackSound",
+			Description: "Describe the sonic profile of a specific track and ground it with nearby songs.",
+			UseWhen:     "The user asks what a specific track sounds like, wants its sonic character described, or wants a compact track profile for one song.",
+			Args: []ToolArgSpec{
+				{Name: "trackId", Type: "string", Description: "Track ID when already known."},
+				{Name: "trackTitle", Type: "string", Description: "Exact track title. Preserve user-provided qualifiers like live, demo, mix, remaster, or parenthetical subtitles."},
+				{Name: "artistName", Type: "string", Description: "Track artist when trackTitle is used."},
+				{Name: "neighborLimit", Type: "number", Description: "How many nearby tracks to include for grounding."},
+			},
+			Example: `{"action":"query","tool":"describeTrackSound","args":{"trackTitle":"Man Of War","artistName":"Radiohead","neighborLimit":5}}`,
+		},
+		{
+			Category:    CategorySimilarity,
+			Name:        "clusterScenes",
+			Description: "List cluster playlists as sonic scenes.",
+			UseWhen:     "The user asks for clusters, scenes, sonic regions, or wants a no-seed exploration starting point.",
+			Args: []ToolArgSpec{
+				{Name: "queryText", Type: "string", Description: "Optional scene-name filter."},
+				{Name: "limit", Type: "number", Description: "Maximum scenes."},
+				{Name: "sampleTracks", Type: "number", Description: "Sample tracks to include per scene."},
+			},
+			Example: `{"action":"query","tool":"clusterScenes","args":{"limit":6,"sampleTracks":3}}`,
 		},
 	}
 }

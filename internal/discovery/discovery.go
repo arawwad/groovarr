@@ -211,6 +211,9 @@ func SelectCandidates(candidates []Candidate, selection string) ([]Candidate, er
 		return nil, fmt.Errorf("selection is required")
 	}
 	lower := strings.ToLower(selection)
+	if isAllSelection(lower) {
+		return candidates, nil
+	}
 
 	if n, ok := parseLeadingCountSelection(lower); ok {
 		if n > len(candidates) {
@@ -220,6 +223,12 @@ func SelectCandidates(candidates []Candidate, selection string) ([]Candidate, er
 			return nil, fmt.Errorf("selection resolved to zero candidates")
 		}
 		return candidates[:n], nil
+	}
+	if ranks, ok := parseTrailingCountSelection(lower, len(candidates)); ok {
+		return selectCandidatesByRank(candidates, ranks), nil
+	}
+	if ranks, ok := parseExplicitRankSelection(lower, len(candidates)); ok {
+		return selectCandidatesByRank(candidates, ranks), nil
 	}
 
 	selected := make([]Candidate, 0, len(candidates))
@@ -697,6 +706,164 @@ func parseLeadingCountSelection(selection string) (int, bool) {
 	}
 	n, ok := wordToNum[fields[1]]
 	return n, ok
+}
+
+func isAllSelection(selection string) bool {
+	switch strings.TrimSpace(selection) {
+	case "all", "those", "them", "these", "everything", "all of them", "all of those", "all of these":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseTrailingCountSelection(selection string, total int) ([]int, bool) {
+	normalized := strings.TrimSpace(strings.TrimPrefix(selection, "the "))
+	normalized = strings.ReplaceAll(normalized, "final", "last")
+	fields := strings.Fields(normalized)
+	if len(fields) == 0 || fields[0] != "last" || total <= 0 {
+		return nil, false
+	}
+	if len(fields) == 1 {
+		return []int{total}, true
+	}
+	if isRankLabel(fields[1]) {
+		return []int{total}, true
+	}
+	n, ok := parseRankToken(fields[1])
+	if !ok {
+		return nil, false
+	}
+	if n > total {
+		n = total
+	}
+	if n <= 0 {
+		return nil, false
+	}
+	start := total - n + 1
+	ranks := make([]int, 0, n)
+	for i := start; i <= total; i++ {
+		ranks = append(ranks, i)
+	}
+	return ranks, true
+}
+
+func parseExplicitRankSelection(selection string, total int) ([]int, bool) {
+	if total <= 0 {
+		return nil, false
+	}
+	normalized := strings.TrimSpace(strings.TrimPrefix(selection, "the "))
+	normalized = strings.NewReplacer("&", ",", " and ", ",", "\"", "", "'", "").Replace(normalized)
+	parts := strings.Split(normalized, ",")
+	ranks := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		part = normalizeRankSelectionPart(part)
+		if part == "" {
+			continue
+		}
+		n, ok := parseRankToken(part)
+		if !ok || n <= 0 || n > total {
+			return nil, false
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		ranks = append(ranks, n)
+	}
+	if len(ranks) == 0 {
+		return nil, false
+	}
+	return ranks, true
+}
+
+func normalizeRankSelectionPart(part string) string {
+	part = strings.TrimSpace(part)
+	part = strings.Trim(part, ".!?")
+	prefixes := []string{
+		"album ", "albums ", "record ", "records ", "result ", "results ",
+		"item ", "items ", "candidate ", "candidates ", "rank ", "number ", "no ",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(part, prefix) {
+			part = strings.TrimSpace(strings.TrimPrefix(part, prefix))
+			break
+		}
+	}
+	if isRankLabel(part) {
+		return ""
+	}
+	return strings.TrimPrefix(part, "#")
+}
+
+func isRankLabel(part string) bool {
+	switch strings.TrimSpace(part) {
+	case "album", "albums", "record", "records", "result", "results", "item", "items", "candidate", "candidates":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseRankToken(raw string) (int, bool) {
+	token := strings.TrimSpace(strings.ToLower(raw))
+	token = strings.Trim(token, ".!?")
+	token = strings.TrimPrefix(token, "#")
+	if token == "" {
+		return 0, false
+	}
+	for _, suffix := range []string{"st", "nd", "rd", "th"} {
+		if strings.HasSuffix(token, suffix) {
+			if n, err := strconv.Atoi(strings.TrimSuffix(token, suffix)); err == nil {
+				return n, n > 0
+			}
+		}
+	}
+	if n, err := strconv.Atoi(token); err == nil {
+		return n, n > 0
+	}
+	switch token {
+	case "one", "first":
+		return 1, true
+	case "two", "second":
+		return 2, true
+	case "three", "third":
+		return 3, true
+	case "four", "fourth":
+		return 4, true
+	case "five", "fifth":
+		return 5, true
+	case "six", "sixth":
+		return 6, true
+	case "seven", "seventh":
+		return 7, true
+	case "eight", "eighth":
+		return 8, true
+	case "nine", "ninth":
+		return 9, true
+	case "ten", "tenth":
+		return 10, true
+	default:
+		return 0, false
+	}
+}
+
+func selectCandidatesByRank(candidates []Candidate, ranks []int) []Candidate {
+	if len(ranks) == 0 {
+		return nil
+	}
+	byRank := make(map[int]Candidate, len(candidates))
+	for _, candidate := range candidates {
+		byRank[candidate.Rank] = candidate
+	}
+	selected := make([]Candidate, 0, len(ranks))
+	for _, rank := range ranks {
+		if candidate, ok := byRank[rank]; ok {
+			selected = append(selected, candidate)
+		}
+	}
+	return selected
 }
 
 func tokenSet(v string) map[string]struct{} {

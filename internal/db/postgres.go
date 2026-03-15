@@ -442,6 +442,16 @@ func (c *Client) GetAlbums(ctx context.Context, limit int, filters map[string]in
 		args = append(args, year)
 		argIdx++
 	}
+	if minYear, ok := filters["minYear"].(int); ok {
+		query += fmt.Sprintf(" AND year >= $%d", argIdx)
+		args = append(args, minYear)
+		argIdx++
+	}
+	if maxYear, ok := filters["maxYear"].(int); ok {
+		query += fmt.Sprintf(" AND year <= $%d", argIdx)
+		args = append(args, maxYear)
+		argIdx++
+	}
 	if queryText, ok := filters["queryText"].(string); ok && strings.TrimSpace(queryText) != "" {
 		like := "%" + normalizeSearchKey(queryText) + "%"
 		nameKeyExpr := normalizedSearchKeySQL("name")
@@ -1352,6 +1362,21 @@ func (c *Client) GetArtistByName(ctx context.Context, name string) (*Artist, err
 func (c *Client) GetAlbumByName(ctx context.Context, name string) (*Album, error) {
 	query := `SELECT id, name, artist_name, rating, play_count, last_played, year, genre, embedding FROM albums WHERE name ILIKE $1 LIMIT 1`
 	row := c.pool.QueryRow(ctx, query, name)
+
+	var a Album
+	err := row.Scan(&a.ID, &a.Name, &a.ArtistName, &a.Rating, &a.PlayCount, &a.LastPlayed, &a.Year, &a.Genre, &a.Embedding)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (c *Client) GetAlbumByID(ctx context.Context, id string) (*Album, error) {
+	query := `SELECT id, name, artist_name, rating, play_count, last_played, year, genre, embedding FROM albums WHERE id = $1 LIMIT 1`
+	row := c.pool.QueryRow(ctx, query, id)
 
 	var a Album
 	err := row.Scan(&a.ID, &a.Name, &a.ArtistName, &a.Rating, &a.PlayCount, &a.LastPlayed, &a.Year, &a.Genre, &a.Embedding)

@@ -64,6 +64,7 @@ Optional:
 
 ```bash
 EMBEDDINGS_ENDPOINT=
+SONIC_ANALYSIS_ENABLED=true
 SYNC_LASTFM_ENABLED=false
 LASTFM_API_KEY=
 SYNC_LASTFM_ALBUMS_PER_SYNC=10
@@ -80,7 +81,13 @@ From this directory:
 
 ```bash
 cp .env.example .env
-docker compose --env-file .env up -d
+SONIC_ANALYSIS_ENABLED=true make up
+```
+
+If you want Groovarr without the internal sonic-analysis stack:
+
+```bash
+SONIC_ANALYSIS_ENABLED=false make up
 ```
 
 Postgres is intentionally internal to this bundle:
@@ -96,7 +103,7 @@ Media import split:
 - downloader inbox stays internal under `${GROOVARR_DATA_DIR}/downloads/inbox`
 - beets library output goes to `BEETS_LIBRARY_PATH`
 
-For local source-based iteration, use [docker-compose.dev.yml](./docker-compose.dev.yml).
+For local source-based iteration, use `SONIC_ANALYSIS_ENABLED=true make dev-up` from this repo.
 
 Current downloader packaging note:
 

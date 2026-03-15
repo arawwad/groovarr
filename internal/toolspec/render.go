@@ -9,7 +9,14 @@ func RenderPromptCatalog(specs []ToolSpec) string {
 	var builder strings.Builder
 	builder.WriteString("Tool manifest:\n")
 	builder.WriteString("Use only the tools listed below. Pick the tool that best matches the user's intent.\n")
+	currentCategory := ""
 	for _, spec := range specs {
+		if strings.TrimSpace(spec.Category) != "" && spec.Category != currentCategory {
+			currentCategory = spec.Category
+			builder.WriteString("\n")
+			builder.WriteString(currentCategory)
+			builder.WriteString(":\n")
+		}
 		builder.WriteString("- ")
 		builder.WriteString(spec.Name)
 		builder.WriteString(": ")

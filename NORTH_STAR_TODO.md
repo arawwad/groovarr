@@ -305,13 +305,13 @@ Add exploration features that justify local AudioMuse long term.
 
 ### TODO
 
-- [ ] Add Music Map-style library visualization.
-- [ ] Add Song Path / bridge-track generation between two tracks.
-- [ ] Add cluster browsing for scenes/moods/styles.
-- [ ] Add “start here” neighborhood exploration for artists and albums.
+- [x] Add Music Map-style library visualization.
+- [x] Add Song Path / bridge-track generation between two tracks.
+- [x] Add cluster browsing for scenes/moods/styles.
+- [x] Add “start here” neighborhood exploration for artists and albums.
 - [ ] Add support for text-to-sound exploration if AudioMuse CLAP search is viable.
 - [ ] Add saved scenes or sonic collections in Groovarr.
-- [ ] Add UI entrypoints for exploration outside chat.
+- [x] Add UI entrypoints for exploration outside chat.
 
 ### Exit Criteria
 

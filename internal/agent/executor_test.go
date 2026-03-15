@@ -48,6 +48,10 @@ func TestBuildRuntimeContextIncludesFormattedDate(t *testing.T) {
 func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 	got := buildSystemPrompt()
 	disallowed := []string{
+		"Tool manifest:",
+		"albums: List albums in the user's library.",
+		"discoverAlbums: Discover albums beyond the user's current library.",
+		"args: field:string*; filter:object; limit:number",
 		"Tool selection hints:",
 		`For direct removal requests like "remove Ulver from my library"`,
 		`For conversational playlist requests like "make me a melancholy jazz playlist"`,
@@ -58,47 +62,32 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 		}
 	}
 	required := []string{
-		"Tool manifest:",
-		"Use only the tools listed below. Pick the tool that best matches the user's intent.",
 		"Derive the user's intent from the latest message",
 		"ask one concise clarifying question instead of guessing",
+		"Use only the tools listed in the tool manifest for this turn.",
+		"The tool manifest may be a routed subset of all available tools.",
+		"If no listed tool fits, ask one concise clarifying question instead of inventing a tool.",
 		"Do not answer library-stat or library-count questions from model memory.",
 		"For exact counts, prefer stats or facet tools over counting a capped list.",
 		"Reuse prior artists or albums in follow-ups, and prefer multi-value tool args when available.",
 		"Preserve the original subject when narrowing prior recommendation or semantic-search results, then add explicit filters.",
 		"For decade/year follow-ups on semanticAlbumSearch, keep queryText and add minYear/maxYear.",
+		"Preserve explicit song and album title qualifiers from the user verbatim when they matter, including mixes, live versions, remasters, demos, and parenthetical subtitles.",
+		`For track-based tools, do not shorten or normalize away a user-provided version qualifier like "(live)", "(demo)", or "(original Steve Albini 1993 mix)".`,
 		"Recommendations are global by default. Use discoverAlbums unless the user explicitly limits them to their library.",
 		`For "best/top/essential <artist>" prompts, use discoverAlbums unless the user says "in my library"; then use albums.`,
 		"For library-only vibe recommendations, prefer semanticAlbumSearch over albums or discoverAlbums.",
 		"Do not invent tool names, arg names, filter keys, or enum values.",
 		"If you cannot identify one best tool with valid arguments, ask a clarifying question.",
 		`If the user asks for vague "stats", ask whether they mean library composition or listening over time.`,
-		"Clarification examples:",
-		`Assistant: {"action":"respond","response":"Do you want artist library stats or artist listening stats over a time window?"}`,
+		"Tool groups:",
+		"Detailed tool names and args are injected separately for the relevant groups on each turn.",
+		"Library Browse: Library totals plus artist, album, and track lookups.",
+		"Playlist Planning: Preview creating, extending, refreshing, or repairing playlists.",
+		"Decision examples:",
+		`If the user asks "Give me artist stats.", ask whether they mean library composition or listening over time.`,
+		"If the user gives a fully specified track title with a version qualifier, keep that exact title when calling a track or song-path tool.",
 		"Preview before state-changing operations.",
-		"discoverAlbums: Discover albums beyond the user's current library.",
-		"startArtistRemovalPreview: Prepare a preview for removing an artist from the library.",
-		"libraryFacetCounts: Facet counts such as genres, years, or decades.",
-		"albums: List albums in the user's library.",
-		"args: artistName:string; artistNames:array<string>; queryText:string; genre:string; year:number; unplayed:boolean; notPlayedSince:string; rating:number; ratingBelow:number; sortBy:string; limit:number",
-		"schema: filter keys: artistName, artistNames, genre, exactAlbums, minAlbums, maxAlbums, minTotalPlays, maxTotalPlays, inactiveSince, notPlayedSince, playedSince, playedUntil, maxPlaysInWindow",
-		"args: field:string*; filter:object; limit:number",
-		"schema: filter keys: artistName, playedSince, playedUntil, minPlaysInWindow, maxPlaysInWindow, minAlbums, maxAlbums",
-		"schema: field is required; filter keys: genre, artistName, year, minYear, maxYear, unplayed, notPlayedSince",
-		`example: {"action":"query","tool":"discoverAlbums","args":{"query":"records like Talk Talk's Laughing Stock but warmer and more spacious","limit":5}}`,
-		`example: {"action":"query","tool":"artistListeningStats","args":{"filter":{"playedSince":"2026-02-10","playedUntil":"2026-03-10"},"sort":"plays","limit":10}}`,
-		`Assistant: {"action":"query","tool":"artistLibraryStats","args":{"filter":{"artistName":"Pink Floyd"},"sort":"albums","limit":5}}`,
-		`Assistant: {"action":"query","tool":"artistLibraryStats","args":{"filter":{"artistNames":["Radiohead","The Beatles"]},"sort":"albums","limit":10}}`,
-		`Assistant: {"action":"query","tool":"badlyRatedAlbums","args":{"limit":20,"maxTrackDetails":3}}`,
-		`Assistant: {"action":"query","tool":"albums","args":{"artistNames":["Radiohead","The Beatles","Pink Floyd"],"sortBy":"rating","limit":12}}`,
-		`Assistant: {"action":"respond","response":"I can prepare a cleanup preview for those albums."}`,
-		`Assistant: {"action":"query","tool":"discoverAlbums","args":{"query":"three records for a rainy late-night walk","limit":3}}`,
-		`Assistant: {"action":"query","tool":"discoverAlbums","args":{"query":"best 5 Bjork albums","limit":5}}`,
-		`Assistant: {"action":"query","tool":"albums","args":{"artistName":"Bjork","sortBy":"rating","limit":5}}`,
-		`Assistant: {"action":"query","tool":"semanticAlbumSearch","args":{"queryText":"melancholic dream pop","minYear":1990,"maxYear":1999,"limit":6}}`,
-		`example: {"action":"query","tool":"startArtistRemovalPreview","args":{"artistName":"Warpaint"}}`,
-		`example: {"action":"query","tool":"semanticAlbumSearch","args":{"queryText":"melancholic dream pop","minYear":1990,"maxYear":1999,"limit":5}}`,
-		`badlyRatedAlbums: Find albums in the user's library that contain any badly rated tracks.`,
 	}
 	for _, fragment := range required {
 		if !strings.Contains(got, fragment) {
@@ -109,7 +98,7 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 
 func TestBuildSystemPromptIsCompact(t *testing.T) {
 	got := buildSystemPrompt()
-	if len(got) > 16000 {
+	if len(got) > 7000 {
 		t.Fatalf("buildSystemPrompt() too long: %d chars", len(got))
 	}
 }
@@ -119,11 +108,12 @@ func TestBuildConversationWithRuntimePlacesRuntimeBeforeHistory(t *testing.T) {
 	got := buildConversationWithRuntime(
 		"system prompt",
 		"Authoritative runtime context:\nCurrent date: Sunday, March 8, 2026",
+		"Tool manifest for this turn.\nTool manifest:\n- albums: ...",
 		history,
 		"latest user message",
 	)
-	if len(got) != 4 {
-		t.Fatalf("len(messages) = %d, want 4", len(got))
+	if len(got) != 5 {
+		t.Fatalf("len(messages) = %d, want 5", len(got))
 	}
 	if got[0].Role != "system" || got[0].Content != "system prompt" {
 		t.Fatalf("messages[0] = %+v", got[0])
@@ -131,11 +121,79 @@ func TestBuildConversationWithRuntimePlacesRuntimeBeforeHistory(t *testing.T) {
 	if got[1].Role != "assistant" || !strings.Contains(got[1].Content, "Current date: Sunday, March 8, 2026") {
 		t.Fatalf("messages[1] = %+v", got[1])
 	}
-	if got[2] != history[0] {
-		t.Fatalf("messages[2] = %+v, want %+v", got[2], history[0])
+	if got[2].Role != "assistant" || !strings.Contains(got[2].Content, "Tool manifest for this turn.") {
+		t.Fatalf("messages[2] = %+v", got[2])
 	}
-	if got[3].Role != "user" || got[3].Content != "latest user message" {
-		t.Fatalf("messages[3] = %+v", got[3])
+	if got[3] != history[0] {
+		t.Fatalf("messages[3] = %+v, want %+v", got[3], history[0])
+	}
+	if got[4].Role != "user" || got[4].Content != "latest user message" {
+		t.Fatalf("messages[4] = %+v", got[4])
+	}
+}
+
+func TestBuildToolManifestPromptRoutesDiscoveryPrompt(t *testing.T) {
+	prompt := buildToolManifestPromptForMode("Best 5 Bjork albums", nil, toolManifestModeRouted)
+	if !strings.Contains(strings.Join(prompt.Categories, ","), "Discovery") {
+		t.Fatalf("categories = %v, want Discovery", prompt.Categories)
+	}
+	if !strings.Contains(prompt.Content, "discoverAlbums: Discover albums beyond the user's current library.") {
+		t.Fatalf("manifest = %q", prompt.Content)
+	}
+	if strings.Contains(prompt.Content, "startArtistRemovalPreview") {
+		t.Fatalf("manifest unexpectedly contains cleanup tools: %q", prompt.Content)
+	}
+}
+
+func TestBuildToolManifestPromptRoutesAnalyticsPrompt(t *testing.T) {
+	prompt := buildToolManifestPromptForMode("How many Pink Floyd albums are in my library?", nil, toolManifestModeRouted)
+	if !strings.Contains(strings.Join(prompt.Categories, ","), "Library Analytics") {
+		t.Fatalf("categories = %v, want Library Analytics", prompt.Categories)
+	}
+	if !strings.Contains(prompt.Content, "artistLibraryStats: Artist-level library composition stats.") {
+		t.Fatalf("manifest = %q", prompt.Content)
+	}
+}
+
+func TestBuildToolManifestPromptUsesHistoryForFollowUp(t *testing.T) {
+	history := []Message{
+		{Role: "user", Content: "Give me three records for a rainy late-night walk."},
+		{Role: "assistant", Content: "I would start with these three albums."},
+	}
+	prompt := buildToolManifestPromptForMode("From those, give me three albums to revisit today.", history, toolManifestModeRouted)
+	if !strings.Contains(strings.Join(prompt.Categories, ","), "Discovery") {
+		t.Fatalf("categories = %v, want Discovery from history", prompt.Categories)
+	}
+}
+
+func TestBuildToolManifestPromptFullModeIncludesAllTools(t *testing.T) {
+	prompt := buildToolManifestPromptForMode("hello", nil, toolManifestModeFull)
+	required := []string{
+		"discoverAlbums: Discover albums beyond the user's current library.",
+		"startArtistRemovalPreview: Prepare a preview for removing an artist from the library.",
+		"navidromePlaylists: List saved Navidrome playlists.",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(prompt.Content, fragment) {
+			t.Fatalf("full manifest missing %q", fragment)
+		}
+	}
+}
+
+func TestRenderPlaylistPlanDetailsResult(t *testing.T) {
+	raw := `{"data":{"playlistPlanDetails":{"playlistName":"Late Night","counts":{"planned":2},"resolutionCounts":{"resolved":2,"available":1,"missing":1,"ambiguous":0,"errors":0,"unresolved":0},"tracks":[{"rank":1,"artistName":"Air","trackTitle":"Alone in Kyoto","status":"available","reason":"fits the nocturnal mood"},{"rank":2,"artistName":"Air","trackTitle":"La Femme d'Argent","status":"missing","reason":"expands the same palette"}]}}}`
+	got, ok := renderToolResult("playlistPlanDetails", nil, raw)
+	if !ok {
+		t.Fatal("renderToolResult() did not render playlistPlanDetails")
+	}
+	if !strings.Contains(got, `Current plan for "Late Night" (2 tracks). Resolution snapshot: 1 available, 1 missing, 0 ambiguous, 0 errors`) {
+		t.Fatalf("renderToolResult() = %q", got)
+	}
+	if !strings.Contains(got, `1. Alone in Kyoto by Air [available] - fits the nocturnal mood`) {
+		t.Fatalf("renderToolResult() = %q", got)
+	}
+	if !strings.Contains(got, `2. La Femme d'Argent by Air [missing] - expands the same palette`) {
+		t.Fatalf("renderToolResult() = %q", got)
 	}
 }
 
@@ -307,6 +365,42 @@ func TestRenderToolResultAddTrackToNavidromePlaylist(t *testing.T) {
 		t.Fatal("renderToolResult() did not render addTrackToNavidromePlaylist")
 	}
 	want := `Added "Alone in Kyoto" by Air to playlist "Late Night".`
+	if got != want {
+		t.Fatalf("renderToolResult() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderToolResultAddOrQueueTrackToNavidromePlaylistAdded(t *testing.T) {
+	raw := `{"data":{"addOrQueueTrackToNavidromePlaylist":{"playlistName":"Late Night","artistName":"Air","trackTitle":"Alone in Kyoto","mode":"added"}}}`
+	got, ok := renderToolResult("addOrQueueTrackToNavidromePlaylist", nil, raw)
+	if !ok {
+		t.Fatal("renderToolResult() did not render addOrQueueTrackToNavidromePlaylist")
+	}
+	want := `Added "Alone in Kyoto" by Air to playlist "Late Night".`
+	if got != want {
+		t.Fatalf("renderToolResult() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderToolResultAddOrQueueTrackToNavidromePlaylistAlreadyQueued(t *testing.T) {
+	raw := `{"data":{"addOrQueueTrackToNavidromePlaylist":{"playlistName":"Late Night","artistName":"Air","trackTitle":"La Femme d'Argent","mode":"already_queued"}}}`
+	got, ok := renderToolResult("addOrQueueTrackToNavidromePlaylist", nil, raw)
+	if !ok {
+		t.Fatal("renderToolResult() did not render addOrQueueTrackToNavidromePlaylist")
+	}
+	want := `"La Femme d'Argent" by Air is already queued for playlist "Late Night". Reconcile will add it once it becomes available.`
+	if got != want {
+		t.Fatalf("renderToolResult() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderToolResultAddOrQueueTrackToNavidromePlaylistAmbiguous(t *testing.T) {
+	raw := `{"data":{"addOrQueueTrackToNavidromePlaylist":{"playlistName":"Late Night","artistName":"Air","trackTitle":"Alone","mode":"ambiguous","matchCount":3}}}`
+	got, ok := renderToolResult("addOrQueueTrackToNavidromePlaylist", nil, raw)
+	if !ok {
+		t.Fatal("renderToolResult() did not render addOrQueueTrackToNavidromePlaylist")
+	}
+	want := `I found 3 library matches for "Alone" by Air, so I did not change playlist "Late Night".`
 	if got != want {
 		t.Fatalf("renderToolResult() = %q, want %q", got, want)
 	}

@@ -60,6 +60,7 @@ Current V1 scope does not package:
 - Playlist planning, preview, append, and approval flows
 - Lidarr/discovered-album preview workflows
 - Compact web UI for manual chat testing
+- Listen and Sonic Studio surfaces for runtime context, Music Map browsing, Song Path bridging, scene browsing, and vibe search
 
 ## Important Current Limits
 
@@ -93,14 +94,7 @@ HUGGINGFACE_API_KEY=
 DEFAULT_CHAT_MODEL=llama-3.3-70b-versatile
 EMBEDDINGS_ENDPOINT=
 SIMILARITY_DEFAULT_PROVIDER=hybrid
-AUDIOMUSE_URL=
-AUDIOMUSE_TRACKS_PATH=/api/similar_tracks
-AUDIOMUSE_ARTISTS_PATH=/api/similar_artists
-AUDIOMUSE_HEALTH_PATH=/
-AUDIOMUSE_TIMEOUT_SECONDS=8
-AUDIOMUSE_BOOTSTRAP_ENABLED=true
-AUDIOMUSE_BOOTSTRAP_RECENT_ALBUMS=0
-AUDIOMUSE_BOOTSTRAP_TOP_N_MOODS=5
+SONIC_ANALYSIS_ENABLED=true
 SYNC_LASTFM_ENABLED=false
 LASTFM_API_KEY=
 SYNC_LASTFM_ALBUMS_PER_SYNC=10
@@ -139,6 +133,15 @@ Track request example:
   "excludeSeedArtist": false
 }
 ```
+
+### Sonic Studio
+
+The web UI now includes a dedicated visual exploration surface at `/explore` with:
+
+- Music Map point-cloud browsing over the internal sonic map
+- Song Path bridging between two tracks
+- Scene Shelf browsing from internal clustering output
+- text-to-sound vibe search
 
 ## Installation
 

@@ -41,6 +41,57 @@ func TestSelectCandidatesSupportsAlbumArtistSelections(t *testing.T) {
 	}
 }
 
+func TestSelectCandidatesSupportsPronounAllSelection(t *testing.T) {
+	candidates := []Candidate{
+		{Rank: 1, ArtistName: "Pink Floyd", AlbumTitle: "The Dark Side of the Moon"},
+		{Rank: 2, ArtistName: "Radiohead", AlbumTitle: "Kid A"},
+	}
+
+	selected, err := SelectCandidates(candidates, "those")
+	if err != nil {
+		t.Fatalf("SelectCandidates returned error: %v", err)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(selected))
+	}
+}
+
+func TestSelectCandidatesSupportsExplicitRankSelection(t *testing.T) {
+	candidates := []Candidate{
+		{Rank: 1, ArtistName: "Pink Floyd", AlbumTitle: "The Dark Side of the Moon"},
+		{Rank: 2, ArtistName: "Pink Floyd", AlbumTitle: "Wish You Were Here"},
+		{Rank: 3, ArtistName: "Pink Floyd", AlbumTitle: "Animals"},
+		{Rank: 4, ArtistName: "Pink Floyd", AlbumTitle: "The Wall"},
+	}
+
+	selected, err := SelectCandidates(candidates, "albums 2 and 4")
+	if err != nil {
+		t.Fatalf("SelectCandidates returned error: %v", err)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(selected))
+	}
+	if selected[0].Rank != 2 || selected[1].Rank != 4 {
+		t.Fatalf("expected ranks 2 and 4, got %+v", selected)
+	}
+}
+
+func TestSelectCandidatesSupportsLastSelection(t *testing.T) {
+	candidates := []Candidate{
+		{Rank: 1, ArtistName: "Pink Floyd", AlbumTitle: "The Dark Side of the Moon"},
+		{Rank: 2, ArtistName: "Pink Floyd", AlbumTitle: "Wish You Were Here"},
+		{Rank: 3, ArtistName: "Pink Floyd", AlbumTitle: "Animals"},
+	}
+
+	selected, err := SelectCandidates(candidates, "last one")
+	if err != nil {
+		t.Fatalf("SelectCandidates returned error: %v", err)
+	}
+	if len(selected) != 1 || selected[0].Rank != 3 {
+		t.Fatalf("expected rank 3, got %+v", selected)
+	}
+}
+
 func TestInferArtistFocus(t *testing.T) {
 	tests := []struct {
 		query string

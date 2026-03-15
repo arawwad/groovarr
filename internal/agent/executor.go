@@ -103,12 +103,13 @@ func (e *Executor) ProcessQuery(ctx context.Context, userMsg string, history []M
 
 func (e *Executor) ProcessQueryWithModel(ctx context.Context, userMsg string, history []Message, modelOverride string) (string, error) {
 	now := time.Now().UTC()
+	toolManifest := buildToolManifestPrompt(userMsg, history)
 	var messages []Message
 	switch promptLayout() {
 	case promptLayoutLegacy:
-		messages = buildConversation(buildLegacySystemPrompt(now), history, userMsg)
+		messages = buildConversation(buildLegacySystemPrompt(now), buildToolManifestContext(toolManifest), history, userMsg)
 	default:
-		messages = buildConversationWithRuntime(buildSystemPrompt(), buildRuntimeContext(now), history, userMsg)
+		messages = buildConversationWithRuntime(buildSystemPrompt(), buildRuntimeContext(now), buildToolManifestContext(toolManifest), history, userMsg)
 	}
 	provider, resolvedModel := resolveRequestedModel(modelOverride, e.groqModel)
 	return e.runConversationLoop(ctx, provider, resolvedModel, messages)
@@ -130,7 +131,9 @@ func buildSystemPromptSections() []string {
 - Use {"action":"respond","response":"..."} when you can answer immediately.
 - Never fabricate data.`,
 		`Operational rules:
-- Use only the tools listed in the tool manifest.
+- Use only the tools listed in the tool manifest for this turn.
+- The tool manifest may be a routed subset of all available tools.
+- If no listed tool fits, ask one concise clarifying question instead of inventing a tool.
 - Prefer tools over model memory for the user's library, listening history, playlists, pending state, discovered albums, or cleanup state.
 - Do not answer library-stat or library-count questions from model memory. Use a tool or ask a clarifying question.
 - For exact counts, prefer stats or facet tools over counting a capped list. Do not infer an exact total from a partial list result.
@@ -138,6 +141,9 @@ func buildSystemPromptSections() []string {
 - Reuse prior artists or albums in follow-ups, and prefer multi-value tool args when available.
 - Preserve the original subject when narrowing prior recommendation or semantic-search results, then add explicit filters.
 - For decade/year follow-ups on semanticAlbumSearch, keep queryText and add minYear/maxYear.
+- Preserve explicit song and album title qualifiers from the user verbatim when they matter, including mixes, live versions, remasters, demos, and parenthetical subtitles.
+- For track-based tools, do not shorten or normalize away a user-provided version qualifier like "(live)", "(demo)", or "(original Steve Albini 1993 mix)".
+- If the user asks what a specific song sounds like or to describe its sonic character, prefer describeTrackSound over unguided prose.
 - Recommendations are global by default. Use discoverAlbums unless the user explicitly limits them to their library.
 - For "best/top/essential <artist>" prompts, use discoverAlbums unless the user says "in my library"; then use albums.
 - For library-only vibe recommendations, prefer semanticAlbumSearch over albums or discoverAlbums.
@@ -148,30 +154,15 @@ func buildSystemPromptSections() []string {
 - If the user asks for vague "stats", ask whether they mean library composition or listening over time.
 - Preview before state-changing operations. Use preview tools instead of inventing direct actions.
 - Similarity tools are only for explicit nearest matches in the user's library, not general recommendations.`,
-		`Clarification examples:
-- User: "Give me artist stats."
-  Assistant: {"action":"respond","response":"Do you want artist library stats or artist listening stats over a time window?"}
-- User: "What are my top artists from the last month?"
-  Assistant: {"action":"query","tool":"artistListeningStats","args":{"filter":{"playedSince":"2026-02-10","playedUntil":"2026-03-10"},"sort":"plays","limit":10}}
-- User: "How many Pink Floyd albums are in my library?"
-  Assistant: {"action":"query","tool":"artistLibraryStats","args":{"filter":{"artistName":"Pink Floyd"},"sort":"albums","limit":5}}
-- User: "How many albums do Radiohead and The Beatles have in my library combined?"
-  Assistant: {"action":"query","tool":"artistLibraryStats","args":{"filter":{"artistNames":["Radiohead","The Beatles"]},"sort":"albums","limit":10}}
-- User: "Do I have any badly rated albums?"
-  Assistant: {"action":"query","tool":"badlyRatedAlbums","args":{"limit":20,"maxTrackDetails":3}}
-- User: "From those, give me three albums to revisit today."
-  Assistant: {"action":"query","tool":"albums","args":{"artistNames":["Radiohead","The Beatles","Pink Floyd"],"sortBy":"rating","limit":12}}
-- User: "Clean those from Lidarr."
-  Assistant: {"action":"respond","response":"I can prepare a cleanup preview for those albums."}
-- User: "Give me three records for a rainy late-night walk."
-  Assistant: {"action":"query","tool":"discoverAlbums","args":{"query":"three records for a rainy late-night walk","limit":3}}
-- User: "Best 5 Bjork albums."
-  Assistant: {"action":"query","tool":"discoverAlbums","args":{"query":"best 5 Bjork albums","limit":5}}
-- User: "Best 5 Bjork albums in my library."
-  Assistant: {"action":"query","tool":"albums","args":{"artistName":"Bjork","sortBy":"rating","limit":5}}
-- User: "Narrow that to the 90s."
-  Assistant: {"action":"query","tool":"semanticAlbumSearch","args":{"queryText":"melancholic dream pop","minYear":1990,"maxYear":1999,"limit":6}}`,
-		toolspec.RenderPromptCatalog(toolspec.PromptCatalog()),
+		toolspec.RenderPromptCategorySummary(toolspec.PromptCategoryCatalog()),
+		`Decision examples:
+- If the user asks "Give me artist stats.", ask whether they mean library composition or listening over time.
+- If the user asks for an exact count, prefer a stats or facet tool over counting a capped list result.
+- Recommendations are global by default unless the user explicitly limits them to their library.
+- Library-only mood or vibe requests should stay inside the owned library rather than switching to global discovery.
+- If the user gives a fully specified track title with a version qualifier, keep that exact title when calling a track or song-path tool.
+- If the user asks what one specific track sounds like, use describeTrackSound before answering descriptively.
+- Preview before cleanup or playlist mutations rather than applying state changes directly.`,
 	}
 }
 
@@ -188,23 +179,36 @@ func buildLegacySystemPrompt(now time.Time) string {
 	return strings.Join(sections, "\n\n")
 }
 
-func buildConversation(systemPrompt string, history []Message, userMsg string) []Message {
-	messages := make([]Message, 0, len(history)+2)
+func buildConversation(systemPrompt, toolManifest string, history []Message, userMsg string) []Message {
+	extra := 2
+	if strings.TrimSpace(toolManifest) != "" {
+		extra++
+	}
+	messages := make([]Message, 0, len(history)+extra)
 	messages = append(messages, Message{Role: "system", Content: systemPrompt})
+	if strings.TrimSpace(toolManifest) != "" {
+		messages = append(messages, Message{Role: "assistant", Content: toolManifest})
+	}
 	messages = append(messages, history...)
 	messages = append(messages, Message{Role: "user", Content: userMsg})
 	return messages
 }
 
-func buildConversationWithRuntime(systemPrompt, runtimeContext string, history []Message, userMsg string) []Message {
+func buildConversationWithRuntime(systemPrompt, runtimeContext, toolManifest string, history []Message, userMsg string) []Message {
 	extra := 2
 	if strings.TrimSpace(runtimeContext) != "" {
+		extra++
+	}
+	if strings.TrimSpace(toolManifest) != "" {
 		extra++
 	}
 	messages := make([]Message, 0, len(history)+extra)
 	messages = append(messages, Message{Role: "system", Content: systemPrompt})
 	if strings.TrimSpace(runtimeContext) != "" {
 		messages = append(messages, Message{Role: "assistant", Content: runtimeContext})
+	}
+	if strings.TrimSpace(toolManifest) != "" {
+		messages = append(messages, Message{Role: "assistant", Content: toolManifest})
 	}
 	messages = append(messages, history...)
 	messages = append(messages, Message{Role: "user", Content: userMsg})
@@ -359,11 +363,13 @@ func renderBulletList(prefix string, items []string) string {
 }
 
 var toolResultRenderers = map[string]toolResultRenderer{
+	"addOrQueueTrackToNavidromePlaylist":       renderAddOrQueueTrackToNavidromePlaylistResult,
 	"addTrackToNavidromePlaylist":              renderAddTrackToNavidromePlaylistResult,
 	"applyDiscoveredAlbums":                    renderApplyDiscoveredAlbumsResult,
 	"createDiscoveredPlaylist":                 renderCreateDiscoveredPlaylistResult,
 	"queueTrackForNavidromePlaylist":           renderQueueTrackForNavidromePlaylistResult,
 	"removePendingTracksFromNavidromePlaylist": renderRemovePendingTracksFromNavidromePlaylistResult,
+	"playlistPlanDetails":                      renderPlaylistPlanDetailsResult,
 	"queueMissingPlaylistTracks":               renderQueueMissingPlaylistTracksResult,
 	"removeTrackFromNavidromePlaylist":         renderRemoveTrackFromNavidromePlaylistResult,
 	"removeArtistFromLibrary":                  renderRemoveArtistFromLibraryResult,
@@ -854,6 +860,83 @@ func renderResolvePlaylistTracksResult(_ map[string]interface{}, raw string) (st
 	), true
 }
 
+func renderPlaylistPlanDetailsResult(_ map[string]interface{}, raw string) (string, bool) {
+	var payload struct {
+		Data struct {
+			Result struct {
+				PlaylistName string `json:"playlistName"`
+				Counts       struct {
+					Planned int `json:"planned"`
+				} `json:"counts"`
+				ResolutionCounts struct {
+					Resolved   int `json:"resolved"`
+					Available  int `json:"available"`
+					Missing    int `json:"missing"`
+					Ambiguous  int `json:"ambiguous"`
+					Errors     int `json:"errors"`
+					Unresolved int `json:"unresolved"`
+				} `json:"resolutionCounts"`
+				Tracks []struct {
+					Rank       int    `json:"rank"`
+					ArtistName string `json:"artistName"`
+					TrackTitle string `json:"trackTitle"`
+					Status     string `json:"status"`
+					Reason     string `json:"reason"`
+				} `json:"tracks"`
+			} `json:"playlistPlanDetails"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil {
+		return "", false
+	}
+	name := strings.TrimSpace(payload.Data.Result.PlaylistName)
+	if name == "" {
+		name = "your planned playlist"
+	}
+	if payload.Data.Result.Counts.Planned == 0 || len(payload.Data.Result.Tracks) == 0 {
+		return "", false
+	}
+	items := make([]string, 0, len(payload.Data.Result.Tracks))
+	for _, track := range payload.Data.Result.Tracks {
+		label := strings.TrimSpace(track.TrackTitle)
+		if artist := strings.TrimSpace(track.ArtistName); artist != "" {
+			label += " by " + artist
+		}
+		if track.Rank > 0 {
+			label = fmt.Sprintf("%d. %s", track.Rank, label)
+		}
+		switch strings.TrimSpace(track.Status) {
+		case "available":
+			label += " [available]"
+		case "missing":
+			label += " [missing]"
+		case "ambiguous":
+			label += " [ambiguous]"
+		case "planned":
+		default:
+			if status := strings.TrimSpace(track.Status); status != "" {
+				label += " [" + status + "]"
+			}
+		}
+		if reason := strings.TrimSpace(track.Reason); reason != "" {
+			label += " - " + reason
+		}
+		items = append(items, label)
+	}
+	if len(items) == 0 {
+		return "", false
+	}
+	prefix := fmt.Sprintf("Current plan for %q (%d tracks)", name, payload.Data.Result.Counts.Planned)
+	counts := payload.Data.Result.ResolutionCounts
+	if counts.Resolved > 0 {
+		prefix += fmt.Sprintf(". Resolution snapshot: %d available, %d missing, %d ambiguous, %d errors", counts.Available, counts.Missing, counts.Ambiguous, counts.Errors)
+		if counts.Unresolved > 0 {
+			prefix += fmt.Sprintf(", %d not resolved yet", counts.Unresolved)
+		}
+	}
+	return renderBulletList(prefix, items), true
+}
+
 func renderNavidromePlaylistsResult(_ map[string]interface{}, raw string) (string, bool) {
 	var payload struct {
 		Data struct {
@@ -976,6 +1059,44 @@ func renderAddTrackToNavidromePlaylistResult(_ map[string]interface{}, raw strin
 		return fmt.Sprintf("Added %q by %s to playlist %q.", result.TrackTitle, result.ArtistName, result.PlaylistName), true
 	}
 	return "", false
+}
+
+func renderAddOrQueueTrackToNavidromePlaylistResult(_ map[string]interface{}, raw string) (string, bool) {
+	var payload struct {
+		Data struct {
+			Result struct {
+				PlaylistName string `json:"playlistName"`
+				ArtistName   string `json:"artistName"`
+				TrackTitle   string `json:"trackTitle"`
+				Mode         string `json:"mode"`
+				MatchCount   int    `json:"matchCount"`
+			} `json:"addOrQueueTrackToNavidromePlaylist"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil {
+		return "", false
+	}
+	result := payload.Data.Result
+	if strings.TrimSpace(result.PlaylistName) == "" || strings.TrimSpace(result.TrackTitle) == "" {
+		return "", false
+	}
+	switch strings.TrimSpace(result.Mode) {
+	case "added":
+		return fmt.Sprintf("Added %q by %s to playlist %q.", result.TrackTitle, result.ArtistName, result.PlaylistName), true
+	case "already_present":
+		return fmt.Sprintf("%q by %s is already in playlist %q.", result.TrackTitle, result.ArtistName, result.PlaylistName), true
+	case "queued":
+		return fmt.Sprintf("Queued %q by %s for playlist %q. Reconcile will add it once it becomes available.", result.TrackTitle, result.ArtistName, result.PlaylistName), true
+	case "already_queued":
+		return fmt.Sprintf("%q by %s is already queued for playlist %q. Reconcile will add it once it becomes available.", result.TrackTitle, result.ArtistName, result.PlaylistName), true
+	case "ambiguous":
+		if result.MatchCount > 0 {
+			return fmt.Sprintf("I found %d library matches for %q by %s, so I did not change playlist %q.", result.MatchCount, result.TrackTitle, result.ArtistName, result.PlaylistName), true
+		}
+		return fmt.Sprintf("I found multiple library matches for %q by %s, so I did not change playlist %q.", result.TrackTitle, result.ArtistName, result.PlaylistName), true
+	default:
+		return "", false
+	}
 }
 
 func renderQueueTrackForNavidromePlaylistResult(_ map[string]interface{}, raw string) (string, bool) {

@@ -18,9 +18,13 @@ If your port differs, replace `7077` with `${GROOVARR_PORT}` from your Groovarr 
 For local source-based testing from the `groovarr/` directory:
 
 ```bash
-docker compose --env-file .env \
-  -f docker-compose.dev.yml \
-  up --build -d groovarr
+SONIC_ANALYSIS_ENABLED=true make dev-up
+```
+
+To test Groovarr without the internal sonic-analysis services:
+
+```bash
+SONIC_ANALYSIS_ENABLED=false make dev-up
 ```
 
 For image-based deployments, use your normal `docker compose up -d` flow from [DEPLOYMENT.md](./DEPLOYMENT.md) instead, then run the same API checks below.
@@ -534,6 +538,31 @@ When testing on Groq, usage logs now include token counts and may include `cache
 ```bash
 docker logs -f groovarr
 ```
+
+## Tool Manifest Mode
+
+The service now supports two tool-manifest modes:
+
+- `routed` (default): compact static system prompt plus a per-turn routed tool manifest for likely categories
+- `full`: inject the full tool manifest every turn as a compatibility fallback
+
+To test `routed`:
+
+1. Set `AGENT_TOOL_MANIFEST_MODE=routed` in `.env` or leave it unset
+2. rebuild and restart the service
+3. run the regression prompts and compare prompt-token usage in `docker logs -f groovarr`
+
+To test `full`:
+
+1. Set `AGENT_TOOL_MANIFEST_MODE=full` in `.env`
+2. rebuild and restart the service
+3. rerun the same prompts and compare behavior and prompt-token usage
+
+To roll back quickly if routed manifests behave worse:
+
+1. set `AGENT_TOOL_MANIFEST_MODE=full`
+2. rebuild `groovarr`
+3. rerun `/api/health` and a small chat smoke set
 
 ## Streaming Test
 

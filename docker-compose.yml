@@ -15,6 +15,8 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    networks:
+      - internal
 
   groovarr:
     image: ${GROOVARR_APP_IMAGE:-ghcr.io/your-org/groovarr:latest}
@@ -47,7 +49,8 @@ services:
       SIMILARITY_DEFAULT_PROVIDER: ${SIMILARITY_DEFAULT_PROVIDER:-hybrid}
       SIMILARITY_HYBRID_LOCAL_WEIGHT: ${SIMILARITY_HYBRID_LOCAL_WEIGHT:-0.45}
       SIMILARITY_HYBRID_AUDIOMUSE_WEIGHT: ${SIMILARITY_HYBRID_AUDIOMUSE_WEIGHT:-0.55}
-      AUDIOMUSE_URL: ${AUDIOMUSE_URL:-}
+      AUDIOMUSE_URL: ${AUDIOMUSE_URL:-http://audiomuse:8000}
+      SONIC_ANALYSIS_ENABLED: ${SONIC_ANALYSIS_ENABLED:-true}
       AUDIOMUSE_TRACKS_PATH: ${AUDIOMUSE_TRACKS_PATH:-/similarity}
       AUDIOMUSE_ARTISTS_PATH: ${AUDIOMUSE_ARTISTS_PATH:-/similarity/artists}
       AUDIOMUSE_HEALTH_PATH: ${AUDIOMUSE_HEALTH_PATH:-/health}
@@ -98,7 +101,7 @@ services:
       groovarr-db:
         condition: service_healthy
     networks:
-      - default
+      - internal
       - integration
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8088/api/health > /dev/null || exit 1"]
@@ -106,112 +109,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-    restart: unless-stopped
-
-  audiomuse-redis:
-    image: redis:7-alpine
-    container_name: audiomuse-redis
-    volumes:
-      - ${GROOVARR_DATA_DIR:-./groovarr-data}/audiomuse/redis:/data
-    restart: unless-stopped
-
-  audiomuse-postgres:
-    image: postgres:15-alpine
-    container_name: audiomuse-postgres
-    environment:
-      POSTGRES_DB: ${AUDIOMUSE_POSTGRES_DB:-audiomusedb}
-      POSTGRES_USER: ${AUDIOMUSE_POSTGRES_USER:-audiomuse}
-      POSTGRES_PASSWORD: ${AUDIOMUSE_POSTGRES_PASSWORD:-audiomusepassword}
-    volumes:
-      - ${GROOVARR_DATA_DIR:-./groovarr-data}/audiomuse/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${AUDIOMUSE_POSTGRES_USER:-audiomuse} -d ${AUDIOMUSE_POSTGRES_DB:-audiomusedb}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    restart: unless-stopped
-
-  audiomuse:
-    image: ghcr.io/neptunehub/audiomuse-ai:latest
-    container_name: audiomuse
-    environment:
-      SERVICE_TYPE: flask
-      TZ: ${TZ:-UTC}
-      MEDIASERVER_TYPE: navidrome
-      NAVIDROME_URL: http://navidrome:4533
-      NAVIDROME_USER: ${NAVIDROME_USERNAME}
-      NAVIDROME_PASSWORD: ${NAVIDROME_PASSWORD}
-      POSTGRES_USER: ${AUDIOMUSE_POSTGRES_USER:-audiomuse}
-      POSTGRES_PASSWORD: ${AUDIOMUSE_POSTGRES_PASSWORD:-audiomusepassword}
-      POSTGRES_DB: ${AUDIOMUSE_POSTGRES_DB:-audiomusedb}
-      POSTGRES_HOST: audiomuse-postgres
-      POSTGRES_PORT: 5432
-      REDIS_URL: redis://audiomuse-redis:6379/0
-      AI_MODEL_PROVIDER: ${AUDIOMUSE_AI_MODEL_PROVIDER:-NONE}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_SERVER_URL: ${AUDIOMUSE_OPENAI_SERVER_URL:-https://api.openai.com/v1/chat/completions}
-      OPENAI_MODEL_NAME: ${AUDIOMUSE_OPENAI_MODEL_NAME:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-      CLAP_ENABLED: ${AUDIOMUSE_CLAP_ENABLED:-true}
-      USE_GPU_CLUSTERING: ${AUDIOMUSE_USE_GPU_CLUSTERING:-false}
-      TEMP_DIR: /app/temp_audio
-    ports:
-      - ${AUDIOMUSE_PORT:-8000}:8000
-    volumes:
-      - ${GROOVARR_DATA_DIR:-./groovarr-data}/audiomuse/temp-flask:/app/temp_audio
-    depends_on:
-      audiomuse-redis:
-        condition: service_started
-      audiomuse-postgres:
-        condition: service_healthy
-    networks:
-      - default
-      - integration
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/ > /dev/null || exit 1"]
-      interval: 60s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
-
-  audiomuse-worker:
-    image: ghcr.io/neptunehub/audiomuse-ai:latest
-    container_name: audiomuse-worker
-    environment:
-      SERVICE_TYPE: worker
-      TZ: ${TZ:-UTC}
-      MEDIASERVER_TYPE: navidrome
-      NAVIDROME_URL: http://navidrome:4533
-      NAVIDROME_USER: ${NAVIDROME_USERNAME}
-      NAVIDROME_PASSWORD: ${NAVIDROME_PASSWORD}
-      POSTGRES_USER: ${AUDIOMUSE_POSTGRES_USER:-audiomuse}
-      POSTGRES_PASSWORD: ${AUDIOMUSE_POSTGRES_PASSWORD:-audiomusepassword}
-      POSTGRES_DB: ${AUDIOMUSE_POSTGRES_DB:-audiomusedb}
-      POSTGRES_HOST: audiomuse-postgres
-      POSTGRES_PORT: 5432
-      REDIS_URL: redis://audiomuse-redis:6379/0
-      AI_MODEL_PROVIDER: ${AUDIOMUSE_AI_MODEL_PROVIDER:-NONE}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_SERVER_URL: ${AUDIOMUSE_OPENAI_SERVER_URL:-https://api.openai.com/v1/chat/completions}
-      OPENAI_MODEL_NAME: ${AUDIOMUSE_OPENAI_MODEL_NAME:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-      CLAP_ENABLED: ${AUDIOMUSE_CLAP_ENABLED:-true}
-      USE_GPU_CLUSTERING: ${AUDIOMUSE_USE_GPU_CLUSTERING:-false}
-      TEMP_DIR: /app/temp_audio
-    volumes:
-      - ${GROOVARR_DATA_DIR:-./groovarr-data}/audiomuse/temp-worker:/app/temp_audio
-    depends_on:
-      audiomuse-redis:
-        condition: service_started
-      audiomuse-postgres:
-        condition: service_healthy
-    networks:
-      - default
-      - integration
     restart: unless-stopped
 
   groovarr-downloader:
@@ -240,6 +137,8 @@ services:
     restart: unless-stopped
 
 networks:
+  internal:
+    name: ${GROOVARR_INTERNAL_NETWORK:-groovarr-internal}
   integration:
     name: ${GROOVARR_INTEGRATION_NETWORK:-docker_media-network}
     external: true
