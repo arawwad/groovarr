@@ -74,6 +74,8 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 		"For decade/year follow-ups on semanticAlbumSearch, keep queryText and add minYear/maxYear.",
 		"Preserve explicit song and album title qualifiers from the user verbatim when they matter, including mixes, live versions, remasters, demos, and parenthetical subtitles.",
 		`For track-based tools, do not shorten or normalize away a user-provided version qualifier like "(live)", "(demo)", or "(original Steve Albini 1993 mix)".`,
+		"Never invent, rewrite, or approximate a sceneKey from a scene name, subtitle, or mood words.",
+		"If you do not already have an authoritative sceneKey and the scene name may be ambiguous, ask one concise clarifying question instead of fabricating a backend-style key.",
 		"Recommendations are global by default. Use discoverAlbums unless the user explicitly limits them to their library.",
 		`For "best/top/essential <artist>" prompts, use discoverAlbums unless the user says "in my library"; then use albums.`,
 		"For library-only vibe recommendations, prefer semanticAlbumSearch over albums or discoverAlbums.",
@@ -87,6 +89,7 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 		"Decision examples:",
 		`If the user asks "Give me artist stats.", ask whether they mean library composition or listening over time.`,
 		"If the user gives a fully specified track title with a version qualifier, keep that exact title when calling a track or song-path tool.",
+		"If the user refers to a sonic scene loosely and there is no exact prior sceneKey in context, ask which scene they mean rather than synthesizing a sceneKey.",
 		"Preview before state-changing operations.",
 	}
 	for _, fragment := range required {

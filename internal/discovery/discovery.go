@@ -24,6 +24,15 @@ type Request struct {
 	ArtistHint   string
 	Limit        int
 	RequestCount int
+	Seed         *SeedContext
+}
+
+type SeedContext struct {
+	Type                  string
+	Name                  string
+	Subtitle              string
+	RepresentativeArtists []string
+	RepresentativeTracks  []string
 }
 
 type scoredCandidate struct {
@@ -46,7 +55,31 @@ func BuildRequest(query string, limit int) (Request, error) {
 	}, nil
 }
 
+func BuildSceneSeededRequest(name, subtitle string, representativeArtists, representativeTracks []string, direction string, limit int) (Request, error) {
+	direction = strings.TrimSpace(direction)
+	if direction == "" {
+		direction = "adjacent studio albums"
+	}
+	limit = clampLimit(limit)
+	return Request{
+		Query:        direction,
+		ArtistHint:   "",
+		Limit:        limit,
+		RequestCount: clampRequestCount(limit + 2),
+		Seed: &SeedContext{
+			Type:                  "scene",
+			Name:                  strings.TrimSpace(name),
+			Subtitle:              strings.TrimSpace(subtitle),
+			RepresentativeArtists: dedupeStrings(representativeArtists),
+			RepresentativeTracks:  dedupeStrings(representativeTracks),
+		},
+	}, nil
+}
+
 func BuildPrompts(request Request) (string, string) {
+	if request.Seed != nil {
+		return BuildSeededPrompts(request)
+	}
 	systemPrompt := `You are an expert music curator for album discovery.
 
 Return only strict JSON.
@@ -86,6 +119,60 @@ Rules:
 		userPrompt += fmt.Sprintf("\nArtist focus: %s", request.ArtistHint)
 	}
 	return systemPrompt, userPrompt
+}
+
+func BuildSeededPrompts(request Request) (string, string) {
+	systemPrompt := `You are an expert music curator for album discovery.
+
+Return only strict JSON.
+
+Task:
+- Use the structured seed context below as the primary guide for the recommendation space.
+- Recommend external studio albums that are adjacent to the seed context, not a restatement of the exact same implied records.
+- Prefer critically acclaimed, coherent, high-signal albums.
+- Avoid obvious duplicates, live albums, deluxe editions, compilations, and box sets unless the request explicitly asks for them.
+- Keep the output compact and useful for later Lidarr matching.
+
+Output schema:
+{
+  "albums": [
+    {
+      "artistName": "Artist",
+      "albumTitle": "Album",
+      "year": 1973,
+      "reason": "Short reason"
+    }
+  ]
+}
+
+Rules:
+- Return up to the requested number of albums, not necessarily exactly that many.
+- Return a strong ranked list with no filler picks.
+- Keep reasons under 18 words.
+- Prefer studio albums.
+- Treat representative artists and tracks as stylistic anchors, not mandatory repeats.
+- Prefer adjacent albums and artists when they better fit the seed context than obvious same-artist repeats.
+- If confidence is low, omit uncertain candidates instead of guessing.
+- Never include markdown or prose outside the JSON object.`
+
+	seed := request.Seed
+	lines := []string{
+		fmt.Sprintf("Find up to %d high-confidence albums for this request: %s", request.RequestCount, request.Query),
+		fmt.Sprintf("Seed type: %s", strings.TrimSpace(seed.Type)),
+	}
+	if name := strings.TrimSpace(seed.Name); name != "" {
+		lines = append(lines, "Seed profile: "+name)
+	}
+	if subtitle := strings.TrimSpace(seed.Subtitle); subtitle != "" {
+		lines = append(lines, "Seed feel: "+subtitle)
+	}
+	if len(seed.RepresentativeArtists) > 0 {
+		lines = append(lines, "Representative artists: "+strings.Join(seed.RepresentativeArtists, ", "))
+	}
+	if len(seed.RepresentativeTracks) > 0 {
+		lines = append(lines, "Representative tracks: "+strings.Join(seed.RepresentativeTracks, "; "))
+	}
+	return systemPrompt, strings.Join(lines, "\n")
 }
 
 func BuildFocusedPrompts(request Request) (string, string) {
@@ -309,6 +396,27 @@ func clampRequestCount(count int) int {
 		return 12
 	}
 	return count
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func scoreCandidates(query, artistHint string, albums []Candidate) []scoredCandidate {

@@ -262,6 +262,19 @@ func PromptCatalog() []ToolSpec {
 		},
 		{
 			Category:    CategoryDiscovery,
+			Name:        "discoverAlbumsFromScene",
+			Description: "Discover albums beyond the user's library using one sonic scene as the seed context.",
+			UseWhen:     "The user wants album recommendations based on a known scene, sonic region, or a prior clusterScenes result, especially for prompts like 'albums from that scene' or 'like that scene but darker'. Use sceneKey only when it came from a prior tool result or server context; otherwise use sceneName or ask a clarifying question.",
+			Args: []ToolArgSpec{
+				{Name: "sceneKey", Type: "string", Description: "Exact stable scene key from a prior tool result or server context. Never synthesize or approximate this from a scene label."},
+				{Name: "sceneName", Type: "string", Description: "User-facing scene name when no authoritative sceneKey is available yet."},
+				{Name: "queryText", Type: "string", Description: "Optional directional cue such as darker, more electronic, or less polished."},
+				{Name: "limit", Type: "number", Description: "Maximum albums."},
+			},
+			Example: `{"action":"query","tool":"discoverAlbumsFromScene","args":{"sceneKey":"Indie_Rock_Alternative_Medium_Relaxed_Sad_automatic","queryText":"darker and more spacious","limit":5}}`,
+		},
+		{
+			Category:    CategoryDiscovery,
 			Name:        "matchDiscoveredAlbumsInLidarr",
 			Description: "Check whether previously discovered albums are available or matched in Lidarr.",
 			UseWhen:     "The user asks whether discovered albums are available, matched, or addable.",
@@ -530,13 +543,41 @@ func PromptCatalog() []ToolSpec {
 			Category:    CategorySimilarity,
 			Name:        "clusterScenes",
 			Description: "List cluster playlists as sonic scenes.",
-			UseWhen:     "The user asks for clusters, scenes, sonic regions, or wants a no-seed exploration starting point.",
+			UseWhen:     "The user asks for clusters, scenes, sonic regions, or wants a no-seed exploration starting point. Use this to find or disambiguate scene labels before relying on a sceneKey.",
 			Args: []ToolArgSpec{
 				{Name: "queryText", Type: "string", Description: "Optional scene-name filter."},
 				{Name: "limit", Type: "number", Description: "Maximum scenes."},
 				{Name: "sampleTracks", Type: "number", Description: "Sample tracks to include per scene."},
 			},
 			Example: `{"action":"query","tool":"clusterScenes","args":{"limit":6,"sampleTracks":3}}`,
+		},
+		{
+			Category:    CategorySimilarity,
+			Name:        "sceneTracks",
+			Description: "Inspect the tracks inside one sonic scene.",
+			UseWhen:     "The user asks what is inside a scene, wants the core tracks from a known scene, or follows up on a prior clusterScenes result. Use sceneKey only when it came from a prior tool result or server context; otherwise use sceneName or ask a clarifying question.",
+			Args: []ToolArgSpec{
+				{Name: "sceneKey", Type: "string", Description: "Exact stable scene key from a prior tool result or server context. Never synthesize or approximate this from a scene label."},
+				{Name: "sceneName", Type: "string", Description: "User-facing scene name when no authoritative sceneKey is available yet."},
+				{Name: "limit", Type: "number", Description: "Maximum tracks to return."},
+			},
+			Example: `{"action":"query","tool":"sceneTracks","args":{"sceneKey":"Indie_Rock_Alternative_Medium_Relaxed_Sad_automatic","limit":10}}`,
+		},
+		{
+			Category:    CategorySimilarity,
+			Name:        "sceneExpand",
+			Description: "Find adjacent tracks that extend one sonic scene without repeating its stored tracks.",
+			UseWhen:     "The user wants more tracks from the same region, asks to extend a scene, or gives modifiers like calmer, sadder, or less familiar relative to a known scene. Use sceneKey only when it came from a prior tool result or server context; otherwise use sceneName or ask a clarifying question.",
+			Args: []ToolArgSpec{
+				{Name: "sceneKey", Type: "string", Description: "Exact stable scene key from a prior tool result or server context. Never synthesize or approximate this from a scene label."},
+				{Name: "sceneName", Type: "string", Description: "User-facing scene name when no authoritative sceneKey is available yet."},
+				{Name: "queryText", Type: "string", Description: "Optional directional cue such as calmer, sadder, danceable, or less familiar."},
+				{Name: "limit", Type: "number", Description: "Maximum tracks to return."},
+				{Name: "seedCount", Type: "number", Description: "How many scene tracks to use as expansion seeds."},
+				{Name: "provider", Type: "string", Description: "Similarity provider: local, audiomuse, or hybrid."},
+				{Name: "excludeRecentDays", Type: "number", Description: "Exclude tracks played within this many days."},
+			},
+			Example: `{"action":"query","tool":"sceneExpand","args":{"sceneKey":"Indie_Rock_Alternative_Medium_Relaxed_Sad_automatic","queryText":"calmer and less familiar","limit":10,"provider":"hybrid"}}`,
 		},
 	}
 }

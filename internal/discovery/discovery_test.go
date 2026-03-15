@@ -1,6 +1,9 @@
 package discovery
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSelectCandidatesSupportsCommaSeparatedSelections(t *testing.T) {
 	candidates := []Candidate{
@@ -138,6 +141,43 @@ func TestBuildPromptsIncludesArtistFocus(t *testing.T) {
 	_, userPrompt := BuildPrompts(request)
 	if userPrompt != "Find up to 7 high-confidence albums for this request: best albums by Muse\nArtist focus: Muse" {
 		t.Fatalf("unexpected user prompt: %q", userPrompt)
+	}
+}
+
+func TestBuildSeededPromptsIncludesStructuredSceneContext(t *testing.T) {
+	request, err := BuildSceneSeededRequest(
+		"Indie / Rock / Alternative • Mid-Tempo",
+		"Relaxed, Sad",
+		[]string{"Muse", "Radiohead", "My Morning Jacket"},
+		[]string{"Soldier's Poem by Muse", "In Color by My Morning Jacket"},
+		"darker and more spacious",
+		4,
+	)
+	if err != nil {
+		t.Fatalf("BuildSceneSeededRequest returned error: %v", err)
+	}
+	systemPrompt, userPrompt := BuildPrompts(request)
+	requiredSystem := []string{
+		"Use the structured seed context below as the primary guide",
+		"Treat representative artists and tracks as stylistic anchors",
+	}
+	for _, fragment := range requiredSystem {
+		if !strings.Contains(systemPrompt, fragment) {
+			t.Fatalf("system prompt missing %q: %q", fragment, systemPrompt)
+		}
+	}
+	requiredUser := []string{
+		"Find up to 6 high-confidence albums for this request: darker and more spacious",
+		"Seed type: scene",
+		"Seed profile: Indie / Rock / Alternative • Mid-Tempo",
+		"Seed feel: Relaxed, Sad",
+		"Representative artists: Muse, Radiohead, My Morning Jacket",
+		"Representative tracks: Soldier's Poem by Muse; In Color by My Morning Jacket",
+	}
+	for _, fragment := range requiredUser {
+		if !strings.Contains(userPrompt, fragment) {
+			t.Fatalf("user prompt missing %q: %q", fragment, userPrompt)
+		}
 	}
 }
 

@@ -144,6 +144,10 @@ func buildSystemPromptSections() []string {
 - Preserve explicit song and album title qualifiers from the user verbatim when they matter, including mixes, live versions, remasters, demos, and parenthetical subtitles.
 - For track-based tools, do not shorten or normalize away a user-provided version qualifier like "(live)", "(demo)", or "(original Steve Albini 1993 mix)".
 - If the user asks what a specific song sounds like or to describe its sonic character, prefer describeTrackSound over unguided prose.
+- For scene-based tools, treat sceneKey as an exact stable identifier from prior tool results or server session context only.
+- Never invent, rewrite, or approximate a sceneKey from a scene name, subtitle, or mood words.
+- If you do not already have an authoritative sceneKey and the scene name may be ambiguous, ask one concise clarifying question instead of fabricating a backend-style key.
+- If you need to look up a scene by a user-facing label, prefer sceneName first and only switch to sceneKey when one was previously returned.
 - Recommendations are global by default. Use discoverAlbums unless the user explicitly limits them to their library.
 - For "best/top/essential <artist>" prompts, use discoverAlbums unless the user says "in my library"; then use albums.
 - For library-only vibe recommendations, prefer semanticAlbumSearch over albums or discoverAlbums.
@@ -162,6 +166,7 @@ func buildSystemPromptSections() []string {
 - Library-only mood or vibe requests should stay inside the owned library rather than switching to global discovery.
 - If the user gives a fully specified track title with a version qualifier, keep that exact title when calling a track or song-path tool.
 - If the user asks what one specific track sounds like, use describeTrackSound before answering descriptively.
+- If the user refers to a sonic scene loosely and there is no exact prior sceneKey in context, ask which scene they mean rather than synthesizing a sceneKey.
 - Preview before cleanup or playlist mutations rather than applying state changes directly.`,
 	}
 }
