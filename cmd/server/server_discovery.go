@@ -5,27 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"groovarr/internal/agent"
 	"groovarr/internal/discovery"
 )
-
-func (s *Server) tryDeterministicBroadDiscoveryClarification(lowerMsg string) (string, bool) {
-	if !needsBroadAlbumDiscoveryClarification(lowerMsg) {
-		return "", false
-	}
-	return "Do you want the best albums in your library, or recommendations narrowed by artist, genre, era, or mood?", true
-}
-
-func (s *Server) tryDeterministicArtistDiscoveryScopeClarification(rawMsg string) (string, bool) {
-	artistName, ok := artistDiscoveryScopeClarificationTarget(rawMsg)
-	if !ok {
-		return "", false
-	}
-	return fmt.Sprintf("Do you want the best %s albums in general, or only from your library?", artistName), true
-}
 
 func (s *Server) tryEmbeddingsUnavailableSemanticLibraryQuery(rawMsg string) (string, bool) {
 	if strings.TrimSpace(s.embeddingsURL) != "" {
@@ -130,8 +117,8 @@ func artistDiscoveryScopeClarificationTarget(rawMsg string) (string, bool) {
 	return artistName, true
 }
 
-func (s *Server) tryDeterministicSpecificAlbumDiscovery(ctx context.Context, rawMsg string) (string, bool) {
-	args, ok := buildDeterministicSpecificAlbumDiscoveryArgs(rawMsg)
+func (s *Server) handleSpecificAlbumDiscovery(ctx context.Context, rawMsg string) (string, bool) {
+	args, ok := buildSpecificAlbumDiscoveryArgs(rawMsg)
 	if !ok {
 		return "", false
 	}
@@ -174,7 +161,7 @@ func (s *Server) tryDeterministicSpecificAlbumDiscovery(ctx context.Context, raw
 	return renderRouteBulletList("A few album picks", items, 8), true
 }
 
-func buildDeterministicSpecificAlbumDiscoveryArgs(rawMsg string) (map[string]interface{}, bool) {
+func buildSpecificAlbumDiscoveryArgs(rawMsg string) (map[string]interface{}, bool) {
 	q := strings.TrimSpace(rawMsg)
 	if q == "" {
 		return nil, false
@@ -214,7 +201,7 @@ func buildDeterministicSpecificAlbumDiscoveryArgs(rawMsg string) (map[string]int
 	}, true
 }
 
-func tryDeterministicUnsupportedAlbumRelationshipQuery(lowerMsg string) (string, bool) {
+func unsupportedAlbumRelationshipQueryResponse(lowerMsg string) (string, bool) {
 	q := strings.TrimSpace(lowerMsg)
 	if q == "" {
 		return "", false
@@ -227,7 +214,7 @@ func tryDeterministicUnsupportedAlbumRelationshipQuery(lowerMsg string) (string,
 	return "", false
 }
 
-func (s *Server) tryDeterministicAlbumRelationshipQuery(ctx context.Context, lowerMsg string) (string, bool) {
+func (s *Server) handleAlbumRelationshipQuery(ctx context.Context, lowerMsg string) (string, bool) {
 	args, label, ok := buildDeterministicAlbumRelationshipArgs(lowerMsg)
 	if !ok {
 		return "", false
@@ -303,8 +290,8 @@ func buildDeterministicAlbumRelationshipArgs(lowerMsg string) (map[string]interf
 	return nil, "", false
 }
 
-func (s *Server) tryDeterministicCreativeLibraryAlbums(ctx context.Context, lowerMsg string) (string, bool) {
-	if !containsLibraryOwnershipCue(lowerMsg) {
+func (s *Server) tryCreativeLibraryAlbumsRoute(ctx context.Context, lowerMsg string) (string, bool) {
+	if s.resolver == nil {
 		return "", false
 	}
 	if isCreativeThreeAlbumPrompt(lowerMsg) {
@@ -358,6 +345,68 @@ func (s *Server) tryDeterministicCreativeLibraryAlbums(ctx context.Context, lowe
 		return "Using an experimental/avant-garde heuristic, a weird corner of your library looks like: " + strings.Join(items, ", ") + ".", true
 	}
 	return "", false
+}
+
+func buildStructuredCreativeLibraryQuery(turn normalizedTurn) string {
+	parts := make([]string, 0, 1+len(turn.StyleHints))
+	prompt := strings.TrimSpace(turn.PromptHint)
+	lowerPrompt := strings.ToLower(prompt)
+	if prompt != "" {
+		parts = append(parts, prompt)
+	}
+	for _, hint := range turn.StyleHints {
+		hint = strings.TrimSpace(hint)
+		if hint == "" {
+			continue
+		}
+		if lowerPrompt != "" && strings.Contains(lowerPrompt, strings.ToLower(hint)) {
+			continue
+		}
+		parts = append(parts, hint)
+	}
+	query := compactText(strings.Join(parts, " "), 180)
+	query = strings.Trim(query, " .,;:!?")
+	return query
+}
+
+func (s *Server) handleStructuredCreativeLibraryDiscovery(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
+	if resolved == nil || s.resolver == nil {
+		return "", false
+	}
+	turn := resolved.Turn
+	if turn.Intent != "album_discovery" || turn.QueryScope != "library" || turn.FollowupMode != "none" {
+		return "", false
+	}
+	query := buildStructuredCreativeLibraryQuery(turn)
+	if query == "" {
+		return "", false
+	}
+	raw, err := executeTool(ctx, s.resolver, s.embeddingsURL, "semanticAlbumSearch", map[string]interface{}{
+		"queryText": query,
+		"limit":     3,
+	})
+	if err != nil {
+		return "", false
+	}
+	var parsed struct {
+		Data struct {
+			Items struct {
+				Matches []semanticAlbumSearchMatch `json:"matches"`
+			} `json:"semanticAlbumSearch"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return "", false
+	}
+	if len(parsed.Data.Items.Matches) == 0 {
+		return "I couldn't find strong library-backed picks for that mood yet. Give me one clearer cue like darker, warmer, more nocturnal, or more rhythmic, or I can look outside your library.", true
+	}
+	candidates := semanticMatchesToCreativeCandidates(parsed.Data.Items.Matches)
+	if len(candidates) == 0 {
+		return "I couldn't find strong library-backed picks for that mood yet. Give me one clearer cue like darker, warmer, more nocturnal, or more rhythmic, or I can look outside your library.", true
+	}
+	setLastCreativeAlbumSet(chatSessionIDFromContext(ctx), "semantic_structured", query, candidates)
+	return renderCreativeAlbumSet("From your library", candidates, 3), true
 }
 
 type semanticAlbumRouteMatch struct {
@@ -437,100 +486,262 @@ func (s *Server) semanticAlbumMatches(ctx context.Context, query string, limit i
 	return out, len(out) > 0
 }
 
-func (s *Server) tryDeterministicDiscoveredAlbumsApply(ctx context.Context, msg string) (string, *PendingAction, bool) {
+func (s *Server) resolveStructuredDiscoveredAlbumsApplyOutcome(ctx context.Context, resolved *resolvedTurnContext) (resultSetActionResult, bool) {
+	ref := resolved.resultReference()
+	if resolved == nil || ref.effectiveSetKind() != "discovered_albums" || ref.Action != "preview_apply" {
+		return resultSetActionResult{}, false
+	}
 	sessionID := chatSessionIDFromContext(ctx)
-	candidates, updatedAt, _ := getLastDiscoveredAlbums(sessionID)
-	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > 30*time.Minute {
-		return "", nil, false
-	}
-	if !wantsDiscoveredAlbumApproval(msg) {
-		return "", nil, false
-	}
-
-	selection := extractDiscoveredAlbumSelection(msg)
-	resp, pendingAction, err := s.startDiscoveredAlbumsApplyPreview(ctx, selection)
-	if err != nil {
-		return "", nil, false
-	}
-	if strings.TrimSpace(resp) == "" {
-		return "", nil, false
-	}
-	if pendingAction == nil && !strings.EqualFold(strings.TrimSpace(selection), "all") {
-		return resp, nil, true
-	}
-	return resp, pendingAction, pendingAction != nil
+	return handleResultSetAction(ctx, s, sessionID, ref)
 }
 
-func (s *Server) tryDeterministicDiscoveredAlbumsAvailability(ctx context.Context, msg string) (string, bool) {
+func renderStructuredDiscoveredAlbumsApply(outcome resultSetActionResult) (ChatResponse, bool) {
+	switch outcome.Kind {
+	case "discovered_preview_error":
+		return ChatResponse{Response: "I couldn't check which of those are still missing from your library right now."}, true
+	case "discovered_preview_empty":
+		return ChatResponse{Response: "None of those look missing from your library right now."}, true
+	case "discovered_preview_apply":
+		selected, ok := outcome.Selection.discoveredAlbums()
+		if !ok || len(selected) == 0 {
+			return ChatResponse{}, false
+		}
+		if outcome.PendingAction == nil && !strings.EqualFold(strings.TrimSpace(outcome.Selection.Selection), "all") {
+			return ChatResponse{Response: fmt.Sprintf("I’m ready to apply library actions for %d discovered album(s).", len(selected))}, true
+		}
+		return ChatResponse{
+			Response:      fmt.Sprintf("I’m ready to apply library actions for %d discovered album(s). Use the approval buttons if you want me to proceed.", len(selected)),
+			PendingAction: outcome.PendingAction,
+		}, true
+	default:
+		return ChatResponse{}, false
+	}
+}
+
+func (s *Server) handleStructuredDiscoveredAlbumsApply(ctx context.Context, resolved *resolvedTurnContext) (string, *PendingAction, bool) {
+	outcome, ok := s.resolveStructuredDiscoveredAlbumsApplyOutcome(ctx, resolved)
+	if !ok {
+		return "", nil, false
+	}
+	resp, ok := renderStructuredDiscoveredAlbumsApply(outcome)
+	if !ok {
+		return "", nil, false
+	}
+	return resp.Response, resp.PendingAction, true
+}
+
+func discoveryExecutionHandlers() []serverExecutionHandler {
+	return []serverExecutionHandler{
+		{
+			name: "discovered_albums_availability",
+			canHandle: func(request serverExecutionRequest) bool {
+				return strings.TrimSpace(request.SetKind) == "discovered_albums" &&
+					strings.TrimSpace(request.Operation) == "inspect_availability"
+			},
+			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredDiscoveredAlbumsAvailabilityOutcome(ctx, resolved)
+				if !ok {
+					return ChatResponse{}, false
+				}
+				if resp, ok := renderStructuredDiscoveredAlbumsAvailability(outcome); ok {
+					return ChatResponse{Response: resp}, true
+				}
+				return ChatResponse{}, false
+			},
+		},
+		{
+			name: "discovered_albums_apply",
+			canHandle: func(request serverExecutionRequest) bool {
+				return strings.TrimSpace(request.SetKind) == "discovered_albums" &&
+					strings.TrimSpace(request.Operation) == "preview_apply"
+			},
+			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredDiscoveredAlbumsApplyOutcome(ctx, resolved)
+				if !ok {
+					return ChatResponse{}, false
+				}
+				if resp, ok := renderStructuredDiscoveredAlbumsApply(outcome); ok {
+					return resp, true
+				}
+				return ChatResponse{}, false
+			},
+		},
+	}
+}
+
+func (s *Server) resolveStructuredDiscoveredAlbumsAvailabilityOutcome(ctx context.Context, resolved *resolvedTurnContext) (resultSetActionResult, bool) {
+	ref := resolved.resultReference()
+	if resolved == nil || ref.effectiveSetKind() != "discovered_albums" || ref.Action != "inspect_availability" {
+		return resultSetActionResult{}, false
+	}
 	sessionID := chatSessionIDFromContext(ctx)
-	candidates, updatedAt, _ := getLastDiscoveredAlbums(sessionID)
-	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > 30*time.Minute {
-		return "", false
-	}
-	lower := strings.ToLower(strings.TrimSpace(msg))
-	if lower == "" {
-		return "", false
-	}
-	if !(strings.Contains(lower, "those") || strings.Contains(lower, "them") || strings.Contains(lower, "these")) {
-		return "", false
-	}
-	if !(strings.Contains(lower, "already in my library") ||
-		strings.Contains(lower, "in my library") ||
-		strings.Contains(lower, "available") ||
-		strings.Contains(lower, "already have")) {
-		return "", false
-	}
+	return handleResultSetAction(ctx, s, sessionID, ref)
+}
 
-	selection := fmt.Sprintf("first %d", len(candidates))
-	raw, err := executeTool(ctx, s.resolver, s.embeddingsURL, "matchDiscoveredAlbumsInLidarr", map[string]interface{}{
-		"selection": selection,
-	})
+func renderStructuredDiscoveredAlbumsAvailability(outcome resultSetActionResult) (string, bool) {
+	switch outcome.Kind {
+	case "discovered_availability_error":
+		return "I couldn't check which of those are still missing from your library right now.", true
+	case "discovered_availability_empty":
+		return "None of those look missing from your library right now.", true
+	case "discovered_availability":
+		return renderStructuredDiscoveredAvailability(outcome.Matches, outcome.MissingOnly), true
+	default:
+		return "", false
+	}
+}
+
+func (s *Server) handleStructuredDiscoveredAlbumsAvailability(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
+	outcome, ok := s.resolveStructuredDiscoveredAlbumsAvailabilityOutcome(ctx, resolved)
+	if !ok {
+		return "", false
+	}
+	return renderStructuredDiscoveredAlbumsAvailability(outcome)
+}
+
+func selectFocusedDiscoveredCandidate(candidates []discoveredAlbumCandidate, focusedKey string) ([]discoveredAlbumCandidate, string, bool) {
+	focusedKey = strings.TrimSpace(focusedKey)
+	if focusedKey == "" {
+		return nil, "", false
+	}
+	for _, candidate := range candidates {
+		if normalizedDiscoveredAlbumCandidateKey(candidate) != focusedKey {
+			continue
+		}
+		if candidate.Rank > 0 {
+			return []discoveredAlbumCandidate{candidate}, strconv.Itoa(candidate.Rank), true
+		}
+	}
+	return nil, "", false
+}
+
+func normalizedDiscoveredAlbumCandidateKey(candidate discoveredAlbumCandidate) string {
+	parts := []string{
+		normalizeSearchTerm(candidate.ArtistName),
+		normalizeSearchTerm(candidate.AlbumTitle),
+	}
+	if candidate.Rank > 0 {
+		parts = append([]string{strconv.Itoa(candidate.Rank)}, parts...)
+	}
+	return strings.Join(parts, "::")
+}
+
+func (s *Server) matchSelectedDiscoveredAlbums(ctx context.Context, candidates []discoveredAlbumCandidate, updatedAt time.Time, sourceQuery string) ([]lidarrAlbumMatch, error) {
+	client, err := newLidarrClientFromEnv()
 	if err != nil {
-		return "", false
+		return nil, err
 	}
+	matches, _, err := matchDiscoveredAlbumCandidatesInLidarr(ctx, client, candidates, updatedAt, sourceQuery)
+	if err != nil {
+		return nil, err
+	}
+	return matches, nil
+}
 
-	var parsed struct {
-		Data struct {
-			Match struct {
-				Matches []struct {
-					AlbumTitle string `json:"albumTitle"`
-					Status     string `json:"status"`
-				} `json:"matches"`
-			} `json:"matchDiscoveredAlbumsInLidarr"`
-		} `json:"data"`
+func (s *Server) matchAndFilterMissingDiscoveredCandidates(ctx context.Context, candidates []discoveredAlbumCandidate, updatedAt time.Time, sourceQuery string) ([]discoveredAlbumCandidate, []lidarrAlbumMatch, error) {
+	matches, err := s.matchSelectedDiscoveredAlbums(ctx, candidates, updatedAt, sourceQuery)
+	if err != nil {
+		return nil, nil, err
 	}
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return "", false
-	}
-	if len(parsed.Data.Match.Matches) == 0 {
-		return "", false
-	}
+	filteredCandidates, filteredMatches := filterDiscoveredMatchesMissingOnly(candidates, matches)
+	return filteredCandidates, filteredMatches, nil
+}
 
-	ready := make([]string, 0, len(parsed.Data.Match.Matches))
-	review := make([]string, 0, len(parsed.Data.Match.Matches))
-	for _, item := range parsed.Data.Match.Matches {
+func filterDiscoveredMatchesMissingOnly(candidates []discoveredAlbumCandidate, matches []lidarrAlbumMatch) ([]discoveredAlbumCandidate, []lidarrAlbumMatch) {
+	if len(candidates) == 0 || len(matches) == 0 {
+		return nil, nil
+	}
+	allowed := make(map[int]struct{}, len(matches))
+	filteredMatches := make([]lidarrAlbumMatch, 0, len(matches))
+	for _, match := range matches {
+		if strings.EqualFold(strings.TrimSpace(match.Status), "already_monitored") {
+			continue
+		}
+		allowed[match.Rank] = struct{}{}
+		filteredMatches = append(filteredMatches, match)
+	}
+	if len(filteredMatches) == 0 {
+		return nil, nil
+	}
+	filteredCandidates := make([]discoveredAlbumCandidate, 0, len(filteredMatches))
+	for _, candidate := range candidates {
+		if _, ok := allowed[candidate.Rank]; ok {
+			filteredCandidates = append(filteredCandidates, candidate)
+		}
+	}
+	if len(filteredCandidates) == 0 {
+		return nil, nil
+	}
+	return filteredCandidates, filteredMatches
+}
+
+func buildDiscoveredAlbumRankSelection(candidates []discoveredAlbumCandidate) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	ranks := make([]int, 0, len(candidates))
+	seen := make(map[int]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Rank <= 0 {
+			continue
+		}
+		if _, ok := seen[candidate.Rank]; ok {
+			continue
+		}
+		seen[candidate.Rank] = struct{}{}
+		ranks = append(ranks, candidate.Rank)
+	}
+	if len(ranks) == 0 {
+		return ""
+	}
+	sort.Ints(ranks)
+	out := make([]string, 0, len(ranks))
+	for _, rank := range ranks {
+		out = append(out, strconv.Itoa(rank))
+	}
+	return strings.Join(out, ", ")
+}
+
+func renderStructuredDiscoveredAvailability(matches []lidarrAlbumMatch, missingOnly bool) string {
+	if len(matches) == 0 {
+		return ""
+	}
+	ready := make([]string, 0, len(matches))
+	review := make([]string, 0, len(matches))
+	for _, item := range matches {
 		title := strings.TrimSpace(item.AlbumTitle)
 		if title == "" {
 			continue
 		}
 		switch strings.TrimSpace(strings.ToLower(item.Status)) {
-		case "can_monitor", "already_monitored":
+		case "can_monitor":
 			ready = append(ready, title)
+		case "already_monitored":
+			if !missingOnly {
+				ready = append(ready, title)
+			}
 		default:
 			review = append(review, title)
 		}
 	}
 	parts := make([]string, 0, 2)
 	if len(ready) > 0 {
-		parts = append(parts, "ready to add to your library: "+strings.Join(ready, ", "))
+		if missingOnly {
+			parts = append(parts, "still missing from your library: "+strings.Join(ready, ", "))
+		} else {
+			parts = append(parts, "ready to add to your library: "+strings.Join(ready, ", "))
+		}
 	}
 	if len(review) > 0 {
 		parts = append(parts, "need review: "+strings.Join(review, ", "))
 	}
 	if len(parts) == 0 {
-		return "", false
+		return ""
 	}
-	return "Library check: " + strings.Join(parts, ". ") + ".", true
+	if missingOnly {
+		return "Missing from your library: " + strings.Join(parts, ". ") + "."
+	}
+	return "Library check: " + strings.Join(parts, ". ") + "."
 }
 
 func extractDiscoveredAlbumSelection(msg string) string {
@@ -639,47 +850,4 @@ func parseDiscoveryOrdinalWord(raw string) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func (s *Server) tryDeterministicArtistRemoval(ctx context.Context, rawMsg string) (string, *PendingAction, bool) {
-	target := extractArtistRemovalTarget(rawMsg)
-	if target == "" {
-		return "", nil, false
-	}
-
-	response, pendingAction, err := s.startArtistRemovalPreview(ctx, target)
-	if err != nil {
-		return err.Error(), nil, true
-	}
-	return response, pendingAction, true
-}
-
-func extractArtistRemovalTarget(rawMsg string) string {
-	msg := strings.TrimSpace(rawMsg)
-	if msg == "" {
-		return ""
-	}
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)^can we remove\s+(.+?)\s+from my library$`),
-		regexp.MustCompile(`(?i)^could you remove\s+(.+?)\s+from my library$`),
-		regexp.MustCompile(`(?i)^please remove\s+(.+?)\s+from my library$`),
-		regexp.MustCompile(`(?i)^remove artist\s+(.+?)\s+from my library$`),
-		regexp.MustCompile(`(?i)^delete artist\s+(.+?)\s+from my library$`),
-		regexp.MustCompile(`(?i)^remove\s+(.+?)\s+from my library$`),
-		regexp.MustCompile(`(?i)^delete\s+(.+?)\s+from my library$`),
-		regexp.MustCompile(`(?i)^remove artist\s+(.+)$`),
-		regexp.MustCompile(`(?i)^delete artist\s+(.+)$`),
-	}
-	for _, pattern := range patterns {
-		matches := pattern.FindStringSubmatch(msg)
-		if len(matches) != 2 {
-			continue
-		}
-		target := strings.TrimSpace(matches[1])
-		target = strings.Trim(target, "\"'.,!? ")
-		if target != "" {
-			return target
-		}
-	}
-	return ""
 }

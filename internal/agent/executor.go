@@ -102,8 +102,12 @@ func (e *Executor) ProcessQuery(ctx context.Context, userMsg string, history []M
 }
 
 func (e *Executor) ProcessQueryWithModel(ctx context.Context, userMsg string, history []Message, modelOverride string) (string, error) {
+	return e.ProcessQueryWithSignals(ctx, userMsg, history, modelOverride, nil)
+}
+
+func (e *Executor) ProcessQueryWithSignals(ctx context.Context, userMsg string, history []Message, modelOverride string, signals *TurnSignals) (string, error) {
 	now := time.Now().UTC()
-	toolManifest := buildToolManifestPrompt(userMsg, history)
+	toolManifest := buildToolManifestPrompt(userMsg, history, signals)
 	var messages []Message
 	switch promptLayout() {
 	case promptLayoutLegacy:

@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ .Title }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+    <main class="shell">
+        <section class="topbar">
+            <div>
+                <h1 class="title">{{ .Title }}</h1>
+                <p class="subtitle">{{ .Subtitle }}</p>
+            </div>
+            <nav class="view-nav" aria-label="Primary">
+                <a href="/" class="view-link" data-route-link data-route="chat">Chat</a>
+                <a href="/listen" class="view-link" data-route-link data-route="listen">Navidrome Controls</a>
+                <a href="/explore" class="view-link" data-route-link data-route="explore">Sonic Studio</a>
+            </nav>
+            <div id="mobileStatus" class="mobile-status" aria-live="polite"></div>
+            <div class="status-group">
+                <div id="agentStatus" class="status status-pill"><span class="dot"></span>Agent Online</div>
+                <div id="eventsStatus" class="status status-pill"><span class="dot"></span>Events Connecting</div>
+            </div>
+        </section>
+
+        <section id="chatView" class="view-shell{{ if eq .InitialView "chat" }} active-view{{ end }}" data-view="chat"{{ if ne .InitialView "chat" }} hidden{{ end }}>
+            <section class="chat-tools">
+                <div class="left">
+                    <button id="clearButton" class="ghost-btn" type="button">Clear Chat</button>
+                    <button id="activityToggleButton" class="ghost-btn activity-toggle" type="button" aria-expanded="false" aria-controls="eventsPanel">
+                        Activity
+                        <span id="activityBadge" class="activity-badge" hidden>0</span>
+                    </button>
+                    <button id="optionsToggleButton" class="ghost-btn options-toggle" type="button" aria-expanded="false" aria-controls="mobileOptionsPanel">Options</button>
+                </div>
+                <div id="mobileOptionsPanel" class="right" aria-hidden="false">
+                    <label>Model
+                        <select id="modelSelect" title="LLM model for this chat"></select>
+                    </label>
+                    <label><input id="muteEvents" type="checkbox"> Mute event messages</label>
+                </div>
+            </section>
+
+            <section class="workspace">
+                <section class="chat-panel">
+                    <div class="panel-header">
+                        <div>
+                            <h2>Conversation</h2>
+                            <p>Ask about artists, albums, trends, or recommendations.</p>
+                        </div>
+                    </div>
+                    <section id="chat" class="chat" aria-live="polite"></section>
+                </section>
+
+                <aside id="eventsPanel" class="events-panel" aria-label="Activity log" aria-hidden="true">
+                    <div class="panel-header panel-header-inline">
+                        <div>
+                            <h2>Activity</h2>
+                            <p>Background updates and system events.</p>
+                        </div>
+                        <div class="panel-actions">
+                            <button id="clearEventsButton" class="ghost-btn" type="button">Clear</button>
+                            <button id="closeActivityButton" class="ghost-btn close-activity" type="button">Close</button>
+                        </div>
+                    </div>
+                    <section id="eventsLog" class="events-log" aria-live="polite">
+                        <p class="empty-state">Live events will appear here.</p>
+                    </section>
+                </aside>
+            </section>
+
+            <section class="composer">
+                <label class="sr-only" for="input">Chat input</label>
+                <textarea id="input" rows="1" placeholder="Ask for a recommendation, artist, or album..."></textarea>
+                <div class="composer-actions">
+                    <button id="stopButton" class="ghost-btn secondary" type="button" disabled>Stop</button>
+                    <button id="sendButton" class="primary-btn icon-send" type="button" aria-label="Send"></button>
+                </div>
+            </section>
+        </section>
+
+        <section id="listenView" class="view-shell listen-view{{ if eq .InitialView "listen" }} active-view{{ end }}" data-view="listen"{{ if ne .InitialView "listen" }} hidden{{ end }}>
+            <section class="listen-hero">
+                <div class="panel-header">
+                    <div>
+                        <h2>Navidrome Controls</h2>
+                        <p>This surface owns the recommendation infrastructure Groovarr exposes back into Navidrome. Keep chat for requests. Use this page for playback-facing state.</p>
+                    </div>
+                </div>
+                <div class="listen-hero-actions">
+                    <div id="listenSummaryStatus" class="status status-pill"><span class="dot"></span>Loading controls</div>
+                    <button id="listenDiagnosticsButton" class="ghost-btn" type="button">System Details</button>
+                    <button id="refreshListenButton" class="ghost-btn" type="button">Refresh</button>
+                </div>
+                <div id="listenSystemSnapshot" class="metric-grid listen-hero-metrics">
+                    <p class="empty-state">Loading system snapshot.</p>
+                </div>
+            </section>
+
+            <section class="listen-grid">
+                <article class="listen-card listen-card-wide">
+                    <div class="panel-header">
+                        <div>
+                            <h2>Active Session</h2>
+                            <p>Set the live recommendation context Groovarr should apply to Navidrome right now.</p>
+                        </div>
+                    </div>
+                    <div class="listen-card-body">
+                        <form id="listenContextForm" class="listen-form">
+                            <label class="listen-field">
+                                <span>Mode</span>
+                                <select id="listenModeSelect">
+                                    <option value="adjacent">Adjacent</option>
+                                    <option value="familiar">Familiar</option>
+                                    <option value="deep-cut">Deep Cut</option>
+                                    <option value="surprise">Surprise</option>
+                                    <option value="library-only">Library Only</option>
+                                </select>
+                            </label>
+                            <label class="listen-field listen-field-wide">
+                                <span>Mood</span>
+                                <input id="listenMoodInput" type="text" placeholder="night drive, warm analog, darker and quieter">
+                            </label>
+                            <label class="listen-field">
+                                <span>TTL</span>
+                                <select id="listenTTLSelect">
+                                    <option value="0">Until changed</option>
+                                    <option value="60">1 hour</option>
+                                    <option value="180">3 hours</option>
+                                    <option value="720">12 hours</option>
+                                    <option value="1440">24 hours</option>
+                                </select>
+                            </label>
+                            <div class="listen-form-actions">
+                                <button id="saveListenContextButton" class="primary-btn" type="submit">Apply to Navidrome</button>
+                                <button id="clearListenContextButton" class="ghost-btn" type="button">Reset</button>
+                            </div>
+                        </form>
+                        <div id="listenContextStatus" class="listen-note">No active override.</div>
+                    </div>
+                </article>
+
+                <article id="listenSimilarityCard" class="listen-card" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h2>Similarity Engine</h2>
+                            <p>What Navidrome is using right now for Instant Mix and similarity requests.</p>
+                        </div>
+                    </div>
+                    <div id="listenSimilarityPanel" class="listen-card-body">
+                        <p class="empty-state">Loading similarity health.</p>
+                    </div>
+                </article>
+
+                <article id="listenSyncCard" class="listen-card" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h2>Sync & Library State</h2>
+                            <p>How fresh the Groovarr view of Navidrome is right now.</p>
+                        </div>
+                    </div>
+                    <div id="listenSyncPanel" class="listen-card-body">
+                        <p class="empty-state">Loading sync status.</p>
+                    </div>
+                </article>
+
+                <article class="listen-card listen-card-wide">
+                    <div class="panel-header">
+                        <div>
+                            <h2>Instant Mix Preview</h2>
+                            <p>Pick a seed track and compare the active session against the default adjacent behavior.</p>
+                        </div>
+                    </div>
+                    <div class="listen-card-body">
+                        <div class="preview-search">
+                            <label class="listen-field listen-field-wide">
+                                <span>Seed track</span>
+                                <input id="listenPreviewSearchInput" type="text" placeholder="Search by track or artist">
+                            </label>
+                            <button id="listenPreviewSearchButton" class="ghost-btn" type="button">Search</button>
+                        </div>
+                        <div id="listenPreviewSearchResults" class="preview-search-results explore-inline-hidden" hidden>
+                            <p class="empty-state">Search for a seed track to preview Instant Mix changes.</p>
+                        </div>
+                        <div class="listen-inline-actions">
+                            <div id="listenPreviewStatus" class="listen-note">No preview loaded.</div>
+                            <button id="listenPreviewDetailsButton" class="ghost-btn" type="button" disabled>Open Comparison</button>
+                        </div>
+                        <div id="listenPreviewSummary" class="preview-results">
+                            <p class="empty-state">Pick one seed track to compare the live session against the default adjacent mix.</p>
+                        </div>
+                        <div id="listenPreviewDetails" class="preview-columns" hidden>
+                            <section class="preview-column">
+                                <div class="panel-header">
+                                    <div>
+                                        <h2>Active Context</h2>
+                                        <p>What Navidrome would get right now.</p>
+                                    </div>
+                                </div>
+                                <div id="listenPreviewCurrent" class="preview-results">
+                                    <p class="empty-state">No active preview yet.</p>
+                                </div>
+                            </section>
+                            <section class="preview-column">
+                                <div class="panel-header">
+                                    <div>
+                                        <h2>Default Adjacent</h2>
+                                        <p>Baseline without the active override.</p>
+                                    </div>
+                                </div>
+                                <div id="listenPreviewDefault" class="preview-results">
+                                    <p class="empty-state">No baseline preview yet.</p>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+                </article>
+
+                <article id="listenTasteCard" class="listen-card listen-card-wide" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h2>Taste Profile</h2>
+                            <p>The listening-derived features currently shaping recommendation behavior.</p>
+                        </div>
+                    </div>
+                    <div id="listenTastePanel" class="listen-card-body">
+                        <p class="empty-state">Loading taste profile.</p>
+                    </div>
+                </article>
+            </section>
+        </section>
+
+        <section id="exploreView" class="view-shell listen-view{{ if eq .InitialView "explore" }} active-view{{ end }}" data-view="explore"{{ if ne .InitialView "explore" }} hidden{{ end }}>
+            <section class="listen-hero explore-hero">
+                <div class="panel-header">
+                    <div>
+                        <h2>Sonic Studio</h2>
+                        <p>Use one focused mode at a time. Chat stays primary; this surface is the visual bench for sonic exploration.</p>
+                    </div>
+                </div>
+                <div class="listen-hero-actions">
+                    <div id="exploreSummaryStatus" class="status status-pill"><span class="dot"></span>Loading studio</div>
+                    <button id="refreshExploreButton" class="ghost-btn" type="button">Refresh</button>
+                </div>
+                <div class="explore-mode-tabs" role="tablist" aria-label="Sonic Studio modes">
+                    <button class="explore-mode-tab active" type="button" role="tab" aria-selected="true" data-explore-mode="vibe">Vibe</button>
+                    <button class="explore-mode-tab" type="button" role="tab" aria-selected="false" data-explore-mode="scenes">Scenes</button>
+                    <button class="explore-mode-tab" type="button" role="tab" aria-selected="false" data-explore-mode="bridge">Bridge</button>
+                    <button class="explore-mode-tab" type="button" role="tab" aria-selected="false" data-explore-mode="map">Map</button>
+                </div>
+            </section>
+
+            <section class="listen-grid explore-grid">
+                <article class="listen-card listen-card-wide" data-explore-panel="vibe">
+                    <div class="panel-header">
+                        <div>
+                            <h2>Vibe Search</h2>
+                            <p>Describe a sound in plain language, then open the result drawer for grounded matches and next actions.</p>
+                        </div>
+                    </div>
+                    <div class="listen-card-body">
+                        <div class="preview-search">
+                            <label class="listen-field listen-field-wide">
+                                <span>Describe a vibe</span>
+                                <input id="exploreTextQueryInput" type="text" placeholder="smoky nocturnal trip-hop, colder dream pop, bright motorik guitar haze">
+                            </label>
+                            <button id="exploreTextSearchButton" class="primary-btn" type="button">Search Vibe</button>
+                        </div>
+                        <div class="explore-shortcuts">
+                            <button class="ghost-btn explore-shortcut-btn" type="button" data-chat-shortcut='Find tracks in my library that sound smoky, nocturnal, and trip-hop.'>Nocturnal Trip-Hop</button>
+                            <button class="ghost-btn explore-shortcut-btn" type="button" data-chat-shortcut='Show me the available cluster scenes.'>Scene Shelf in Chat</button>
+                            <button class="ghost-btn explore-shortcut-btn" type="button" data-chat-shortcut='Bridge from Heart-Shaped Box by Nirvana to All Apologies by Nirvana.'>Bridge Example</button>
+                        </div>
+                        <div id="exploreTextStatus" class="listen-note">Describe a texture, mood, or scene to load text-to-sound matches.</div>
+                        <div id="exploreTextResults" class="preview-results">
+                            <p class="empty-state">No vibe search loaded yet.</p>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="listen-card" data-explore-panel="scenes" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h2>Scene Shelf</h2>
+                            <p>Cluster playlists are the no-seed starting points: sonic pockets discovered from the analyzed library.</p>
+                        </div>
+                    </div>
+                    <div class="listen-card-body">
+                        <div class="listen-form-actions">
+                            <button id="startClustersButton" class="primary-btn" type="button">Start Clustering</button>
+                            <button id="listenClustersTaskButton" class="ghost-btn" type="button" hidden>Task Details</button>
+                        </div>
+                        <div id="listenClustersStatus" class="listen-note">Loading scene state.</div>
+                        <div id="listenClustersTask" class="metric-grid" hidden>
+                            <p class="empty-state">No cluster task data yet.</p>
+                        </div>
+                        <div id="listenClustersPanel" class="preview-results cluster-results">
+                            <p class="empty-state">No cluster scenes loaded yet.</p>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="listen-card" data-explore-panel="bridge" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h2>Bridge Builder</h2>
+                            <p>Search both ends inside the path index, choose candidates from the drawer, then inspect the bridge chain here.</p>
+                        </div>
+                    </div>
+                    <div class="listen-card-body">
+                        <div class="preview-search">
+                            <label class="listen-field listen-field-wide">
+                                <span>Start song</span>
+                                <input id="songPathStartInput" type="text" placeholder="Search path index">
+                            </label>
+                            <button id="songPathStartButton" class="ghost-btn" type="button">Search Start</button>
+                        </div>
+                        <div id="songPathStartSelection" class="listen-note">No start song selected yet.</div>
+                        <div id="songPathStartResults" class="preview-search-results explore-inline-hidden" hidden>
+                            <p class="empty-state">Search for the first song in the path.</p>
+                        </div>
+
+                        <div class="preview-search bridge-search-stack">
+                            <label class="listen-field listen-field-wide">
+                                <span>End song</span>
+                                <input id="songPathEndInput" type="text" placeholder="Search path index">
+                            </label>
+                            <button id="songPathEndButton" class="ghost-btn" type="button">Search End</button>
+                        </div>
+                        <div id="songPathEndSelection" class="listen-note">No end song selected yet.</div>
+                        <div id="songPathEndResults" class="preview-search-results explore-inline-hidden" hidden>
+                            <p class="empty-state">Search for the final song in the path.</p>
+                        </div>
+
+                        <form id="songPathForm" class="listen-form bridge-form">
+                            <label class="listen-field">
+                                <span>Path length</span>
+                                <input id="songPathStepsInput" type="number" min="10" max="200" value="25">
+                            </label>
+                            <label class="listen-field listen-checkbox-field">
+                                <span>Keep size exact</span>
+                                <input id="songPathExactCheckbox" type="checkbox">
+                            </label>
+                            <div class="listen-form-actions">
+                                <button id="songPathSubmitButton" class="primary-btn" type="submit">Find Song Path</button>
+                            </div>
+                        </form>
+                        <div id="songPathStatus" class="listen-note">Select a start and end song from the indexed path search.</div>
+                        <div id="songPathResults" class="preview-results">
+                            <p class="empty-state">No song path loaded yet.</p>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="listen-card listen-card-wide" data-explore-panel="map" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h2>Music Map</h2>
+                            <p>Use the map as the visual layer over the same sonic state. Focus a point, then route it into chat or Song Path.</p>
+                        </div>
+                    </div>
+                    <div class="listen-card-body">
+                        <div class="preview-search">
+                            <label class="listen-field">
+                                <span>Map sample</span>
+                                <select id="listenMapPercentSelect">
+                                    <option value="10">10%</option>
+                                    <option value="20" selected>20%</option>
+                                    <option value="50">50%</option>
+                                    <option value="100">100%</option>
+                                </select>
+                            </label>
+                            <button id="listenMapRefreshButton" class="ghost-btn" type="button">Load Map</button>
+                        </div>
+                        <div id="listenMapStatus" class="listen-note">Loading map state.</div>
+                        <div id="listenMapSummary" class="metric-grid">
+                            <p class="empty-state">No map summary yet.</p>
+                        </div>
+                        <div id="listenMapPanel" class="preview-results">
+                            <p class="empty-state">No map points loaded yet.</p>
+                        </div>
+                    </div>
+                </article>
+            </section>
+        </section>
+    </main>
+    <div id="activityBackdrop" class="activity-backdrop" hidden></div>
+    <div id="appToastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <div id="appSheetBackdrop" class="overlay-backdrop" hidden></div>
+    <aside id="appSheet" class="app-sheet" aria-hidden="true" hidden>
+        <div class="app-sheet-header">
+            <div>
+                <h2 id="appSheetTitle">Details</h2>
+            </div>
+            <button id="appSheetClose" class="ghost-btn" type="button">Close</button>
+        </div>
+        <div id="appSheetBody" class="app-sheet-body"></div>
+    </aside>
+    <div id="appDialogBackdrop" class="overlay-backdrop" hidden></div>
+    <section id="appDialog" class="app-dialog" role="dialog" aria-modal="true" aria-hidden="true" hidden>
+        <div class="app-dialog-header">
+            <h2 id="appDialogTitle">Details</h2>
+            <button id="appDialogClose" class="ghost-btn" type="button">Close</button>
+        </div>
+        <div id="appDialogBody" class="app-dialog-body"></div>
+    </section>
+
+    <script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -54,8 +54,14 @@ The server owns:
 - tool execution dispatch
 
 Current file ownership inside `cmd/server`:
-- `routing.go`
-  - deterministic route entrypoint
+- `chat_normalizer.go`
+  - normalized-turn parser contract and session grounding
+- `chat_planner.go`
+  - planner/router contract ahead of the responder
+- `server_normalized_routes.go`
+  - normalized-first server route execution
+- `ORCHESTRATION.md`
+  - staged chat contract, field ownership, and contract-expansion rules
 - `server_playlists.go`
   - saved-playlist reads, follow-ups, append flow, and playlist-availability follow-ups
 - `server_discovery.go`
@@ -140,13 +146,14 @@ Embeddings are stored with versioned embedding documents so sync can trigger tar
 1. Navidrome SQLite is read as the upstream source of truth.
 2. Sync copies the current library snapshot into Postgres and prunes stale rows.
 3. Sync imports new scrobbles into `play_events`.
-4. The chat agent receives user input plus recent chat history and injected session context.
-5. The agent returns either:
+4. The server normalizes the user turn, resolves session context, and plans the execution path.
+5. The agent receives user input plus recent chat history, injected session context, and structured turn signals when the planner selects the agent path.
+6. The agent returns either:
    - a direct response
    - a tool call
    - a clarifying question
-6. The server executes allowed tools and feeds compact JSON results back into the agent loop.
-7. For state-changing operations, the server creates a preview and a pending action instead of allowing direct mutation from the agent.
+7. The server executes allowed tools and feeds compact JSON results back into the agent loop.
+8. For state-changing operations, the server creates a preview and a pending action instead of allowing direct mutation from the agent.
 
 ## Chat Request Flow
 
@@ -154,14 +161,28 @@ Embeddings are stored with versioned embedding documents so sync can trigger tar
 sequenceDiagram
     participant U as User
     participant S as cmd/server
+    participant N as Normalizer + Planner
     participant A as internal/agent
     participant T as Tool Runtime
     participant DB as Postgres/Resolver
 
     U->>S: POST /api/chat
     S->>S: inject history + session context
-    S->>A: user message + history + context
+    S->>N: normalize + resolve context + plan
 
+    alt planner clarification
+        N-->>S: clarification prompt
+        S-->>U: chat response
+    else deterministic route
+        N-->>S: deterministic route
+        S->>T: execute stable server route
+        T->>DB: query library/listening data
+        DB-->>T: compact result
+        T-->>S: route result
+        S-->>U: chat response
+    else agent path
+        N-->>S: agent route + structured turn signals
+        S->>A: user message + history + context + signals
     alt direct response
         A-->>S: {"action":"respond","response":"..."}
         S-->>U: chat response

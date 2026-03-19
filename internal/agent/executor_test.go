@@ -148,7 +148,7 @@ func TestBuildConversationWithRuntimePlacesRuntimeBeforeHistory(t *testing.T) {
 }
 
 func TestBuildToolManifestPromptRoutesDiscoveryPrompt(t *testing.T) {
-	prompt := buildToolManifestPromptForMode("Best 5 Bjork albums", nil, toolManifestModeRouted)
+	prompt := buildToolManifestPromptForMode("Best 5 Bjork albums", nil, nil, toolManifestModeRouted)
 	if !strings.Contains(strings.Join(prompt.Categories, ","), "Discovery") {
 		t.Fatalf("categories = %v, want Discovery", prompt.Categories)
 	}
@@ -161,7 +161,7 @@ func TestBuildToolManifestPromptRoutesDiscoveryPrompt(t *testing.T) {
 }
 
 func TestBuildToolManifestPromptRoutesAnalyticsPrompt(t *testing.T) {
-	prompt := buildToolManifestPromptForMode("How many Pink Floyd albums are in my library?", nil, toolManifestModeRouted)
+	prompt := buildToolManifestPromptForMode("How many Pink Floyd albums are in my library?", nil, nil, toolManifestModeRouted)
 	if !strings.Contains(strings.Join(prompt.Categories, ","), "Library Analytics") {
 		t.Fatalf("categories = %v, want Library Analytics", prompt.Categories)
 	}
@@ -173,6 +173,7 @@ func TestBuildToolManifestPromptRoutesAnalyticsPrompt(t *testing.T) {
 func TestBuildToolManifestPromptRoutesExplicitPlaylistSongListPrompt(t *testing.T) {
 	prompt := buildToolManifestPromptForMode(
 		"Create a playlist for these Radiohead songs: Lift, 15 Step, Separator, Lotus Flower",
+		nil,
 		nil,
 		toolManifestModeRouted,
 	)
@@ -196,14 +197,48 @@ func TestBuildToolManifestPromptUsesHistoryForFollowUp(t *testing.T) {
 		{Role: "user", Content: "Give me three records for a rainy late-night walk."},
 		{Role: "assistant", Content: "I would start with these three albums."},
 	}
-	prompt := buildToolManifestPromptForMode("From those, give me three albums to revisit today.", history, toolManifestModeRouted)
+	prompt := buildToolManifestPromptForMode("From those, give me three albums to revisit today.", history, nil, toolManifestModeRouted)
 	if !strings.Contains(strings.Join(prompt.Categories, ","), "Discovery") {
 		t.Fatalf("categories = %v, want Discovery from history", prompt.Categories)
 	}
 }
 
+func TestBuildToolManifestPromptUsesSignalsForStatsRouting(t *testing.T) {
+	signals := &TurnSignals{
+		Intent:             "stats",
+		QueryScope:         "stats",
+		FollowupMode:       "none",
+		HasRecentListening: true,
+	}
+	prompt := buildToolManifestPromptForMode("Which artists are pulling away from the rest this month?", nil, signals, toolManifestModeRouted)
+	categories := strings.Join(prompt.Categories, ",")
+	if !strings.Contains(categories, "Library Analytics") {
+		t.Fatalf("categories = %v, want Library Analytics from signals", prompt.Categories)
+	}
+	if !strings.Contains(prompt.Content, "artistListeningStats:") {
+		t.Fatalf("manifest = %q, want listening stats tools", prompt.Content)
+	}
+}
+
+func TestBuildToolManifestPromptUsesSignalsForPlaylistRouting(t *testing.T) {
+	signals := &TurnSignals{
+		Intent:                 "playlist",
+		QueryScope:             "playlist",
+		FollowupMode:           "query_previous_set",
+		HasPendingPlaylistPlan: true,
+	}
+	prompt := buildToolManifestPromptForMode("Can you resolve those now?", nil, signals, toolManifestModeRouted)
+	categories := strings.Join(prompt.Categories, ",")
+	if !strings.Contains(categories, "Playlist State") || !strings.Contains(categories, "Playlist Planning") {
+		t.Fatalf("categories = %v, want playlist categories from signals", prompt.Categories)
+	}
+	if !strings.Contains(prompt.Content, "playlistPlanDetails:") {
+		t.Fatalf("manifest = %q, want playlist state tools", prompt.Content)
+	}
+}
+
 func TestBuildToolManifestPromptFullModeIncludesAllTools(t *testing.T) {
-	prompt := buildToolManifestPromptForMode("hello", nil, toolManifestModeFull)
+	prompt := buildToolManifestPromptForMode("hello", nil, nil, toolManifestModeFull)
 	required := []string{
 		"discoverAlbums: Discover albums beyond the user's current library.",
 		"startArtistRemovalPreview: Prepare a preview for removing an artist from the library.",

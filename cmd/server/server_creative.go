@@ -7,10 +7,19 @@ import (
 	"strings"
 	"time"
 
+	"groovarr/internal/agent"
 	"groovarr/internal/db"
 )
 
-func (s *Server) tryDeterministicUnderplayedAlbums(ctx context.Context, rawMsg string) (string, bool) {
+func creativeResultSetCapability(setKind string) resultSetCapability {
+	return resultSetCapability{
+		SetKind:    strings.TrimSpace(setKind),
+		Operations: []string{"filter_by_play_window", "pick_riskier", "pick_safer", "refine_style", "most_recent"},
+		Selectors:  []string{"all", "item_key"},
+	}
+}
+
+func (s *Server) handleUnderplayedAlbums(ctx context.Context, rawMsg string) (string, bool) {
 	if s.dbClient == nil {
 		return "", false
 	}
@@ -31,57 +40,159 @@ func (s *Server) tryDeterministicUnderplayedAlbums(ctx context.Context, rawMsg s
 	return renderCreativeAlbumSet("Three underplayed records from your library", candidates, 3), true
 }
 
-func (s *Server) tryDeterministicCreativeAlbumSetFollowUp(ctx context.Context, rawMsg string) (string, bool) {
-	sessionID := chatSessionIDFromContext(ctx)
-	candidates, updatedAt, mode, _ := getLastCreativeAlbumSet(sessionID)
-	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextCreativeAlbumTTL {
+func (s *Server) handleStructuredCreativeAlbumSetFollowUp(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
+	outcome, ok := s.resolveStructuredCreativeAlbumSetFollowUpOutcome(ctx, resolved)
+	if !ok {
 		return "", false
 	}
-
-	lower := strings.ToLower(strings.TrimSpace(rawMsg))
-	if lower == "" {
-		return "", false
-	}
-
-	if recencyResponse, ok := respondToCreativeAlbumRecencyFollowUp(lower, candidates); ok {
-		return recencyResponse, true
-	}
-	if wantsCreativeRiskierChoice(lower) {
-		pick, ok := chooseRiskierCreativeCandidate(candidates)
-		if !ok {
-			return "", false
-		}
-		return fmt.Sprintf("The riskier pick is %s.", formatCreativeAlbumCandidate(pick, true)), true
-	}
-	if isTasteRefinementPrompt(lower) {
-		refined := s.refineCreativeAlbumCandidates(ctx, rawMsg, candidates)
-		if len(refined) == 0 {
-			return "I couldn't reshape those picks convincingly yet. Give me one clearer cue like warmer, darker, more intimate, or less electronic.", true
-		}
-		setLastCreativeAlbumSet(sessionID, mode, rawMsg, refined)
-		return renderCreativeAlbumSet("Reshaping those picks", refined, 3), true
-	}
-	return "", false
+	return renderStructuredCreativeAlbumSetFollowUp(outcome)
 }
 
-func (s *Server) tryDeterministicRecentListeningInterpretation(ctx context.Context, rawMsg string) (string, bool) {
-	state, ok := getLastRecentListeningSummary(chatSessionIDFromContext(ctx))
-	if !ok || state.updatedAt.IsZero() || time.Since(state.updatedAt) > llmContextRecentListeningTTL {
-		return "", false
+type creativeFollowUpOutcome struct {
+	kind       string
+	single     *creativeAlbumCandidate
+	candidates []creativeAlbumCandidate
+	windowFrom time.Time
+	windowTo   time.Time
+}
+
+func (s *Server) resolveStructuredCreativeAlbumSetFollowUpOutcome(ctx context.Context, resolved *resolvedTurnContext) (creativeFollowUpOutcome, bool) {
+	if resolved == nil {
+		return creativeFollowUpOutcome{}, false
+	}
+	sessionID := chatSessionIDFromContext(ctx)
+	candidates, mode, ok := creativeCandidatesFromResolvedReference(sessionID, resolved)
+	if !ok {
+		return creativeFollowUpOutcome{}, false
 	}
 
-	lower := strings.ToLower(strings.TrimSpace(rawMsg))
-	if lower == "" {
+	switch strings.TrimSpace(resolved.Turn.SubIntent) {
+	case "result_set_most_recent":
+		latest, ok := mostRecentlyPlayedCreativeCandidate(candidates)
+		if !ok {
+			return creativeFollowUpOutcome{kind: "most_recent_empty"}, true
+		}
+		setLastFocusedResultItem(sessionID, resolvedCreativeReferenceKind(resolved), normalizedCreativeAlbumCandidateKey(latest))
+		return creativeFollowUpOutcome{kind: "most_recent_single", single: &latest}, true
+	case "creative_risk_pick":
+		pick, ok := chooseRiskierCreativeCandidate(candidates)
+		if !ok {
+			return creativeFollowUpOutcome{}, false
+		}
+		setLastFocusedResultItem(sessionID, resolvedCreativeReferenceKind(resolved), normalizedCreativeAlbumCandidateKey(pick))
+		return creativeFollowUpOutcome{kind: "risk_pick", single: &pick}, true
+	case "creative_safe_pick":
+		pick, ok := chooseSaferCreativeCandidate(candidates)
+		if !ok {
+			return creativeFollowUpOutcome{}, false
+		}
+		setLastFocusedResultItem(sessionID, resolvedCreativeReferenceKind(resolved), normalizedCreativeAlbumCandidateKey(pick))
+		return creativeFollowUpOutcome{kind: "safe_pick", single: &pick}, true
+	case "creative_refinement":
+		if len(resolved.Turn.StyleHints) == 0 {
+			return creativeFollowUpOutcome{}, false
+		}
+		refined := s.refineCreativeAlbumCandidates(ctx, strings.Join(resolved.Turn.StyleHints, " "), candidates)
+		if len(refined) == 0 {
+			return creativeFollowUpOutcome{kind: "refinement_empty"}, true
+		}
+		setLastCreativeAlbumSet(sessionID, mode, strings.Join(resolved.Turn.StyleHints, " "), refined)
+		return creativeFollowUpOutcome{kind: "refinement_set", candidates: refined}, true
+	default:
+		return creativeFollowUpOutcome{}, false
+	}
+}
+
+func creativeExecutionHandlers() []serverExecutionHandler {
+	return []serverExecutionHandler{
+		{
+			name: "creative_result_set_listening_followup",
+			canHandle: func(request serverExecutionRequest) bool {
+				setKind := strings.TrimSpace(request.SetKind)
+				operation := strings.TrimSpace(request.Operation)
+				return (setKind == "creative_albums" || setKind == "semantic_albums") &&
+					(operation == "filter_by_play_window" || operation == "most_recent")
+			},
+			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
+				outcome, ok := s.resolveAlbumResultSetListeningFollowUpOutcome(ctx, resolved)
+				if !ok {
+					return ChatResponse{}, false
+				}
+				if resp, ok := renderAlbumResultSetListeningFollowUp(outcome); ok {
+					return ChatResponse{Response: resp}, true
+				}
+				return ChatResponse{}, false
+			},
+		},
+		{
+			name: "creative_result_set_followup",
+			canHandle: func(request serverExecutionRequest) bool {
+				setKind := strings.TrimSpace(request.SetKind)
+				operation := strings.TrimSpace(request.Operation)
+				if setKind != "creative_albums" && setKind != "semantic_albums" {
+					return false
+				}
+				switch operation {
+				case "pick_riskier", "pick_safer", "refine_style":
+					return true
+				default:
+					return false
+				}
+			},
+			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredCreativeAlbumSetFollowUpOutcome(ctx, resolved)
+				if !ok {
+					return ChatResponse{}, false
+				}
+				if resp, ok := renderStructuredCreativeAlbumSetFollowUp(outcome); ok {
+					return ChatResponse{Response: resp}, true
+				}
+				return ChatResponse{}, false
+			},
+		},
+	}
+}
+
+func renderStructuredCreativeAlbumSetFollowUp(outcome creativeFollowUpOutcome) (string, bool) {
+	switch outcome.kind {
+	case "most_recent_empty":
+		return "None of those look recently played.", true
+	case "most_recent_single":
+		if outcome.single == nil {
+			return "", false
+		}
+		return fmt.Sprintf("The one you've touched most recently is %s.", formatCreativeAlbumCandidate(*outcome.single, true)), true
+	case "risk_pick":
+		if outcome.single == nil {
+			return "", false
+		}
+		return fmt.Sprintf("The riskier pick is %s.", formatCreativeAlbumCandidate(*outcome.single, true)), true
+	case "safe_pick":
+		if outcome.single == nil {
+			return "", false
+		}
+		return fmt.Sprintf("The safer pick is %s.", formatCreativeAlbumCandidate(*outcome.single, true)), true
+	case "refinement_empty":
+		return "I couldn't reshape those picks convincingly yet. Give me one clearer cue like warmer, darker, more intimate, or less electronic.", true
+	case "refinement_set":
+		if len(outcome.candidates) == 0 {
+			return "", false
+		}
+		return renderCreativeAlbumSet("Reshaping those picks", outcome.candidates, 3), true
+	default:
 		return "", false
 	}
+}
 
-	if wantsListeningTasteInterpretation(lower) {
+func describeStructuredRecentListeningInterpretation(state recentListeningState, subIntent string) (string, bool) {
+	switch strings.TrimSpace(subIntent) {
+	case "listening_interpretation":
 		return describeRecentListeningTaste(state), true
+	case "artist_dominance":
+		return describeRecentListeningDominance(state, ""), true
+	default:
+		return "", false
 	}
-	if wantsListeningDominanceAnswer(lower) {
-		return describeRecentListeningDominance(state, lower), true
-	}
-	return "", false
 }
 
 func isUnderplayedAlbumPrompt(lower string) bool {
@@ -107,49 +218,6 @@ func isUnderplayedAlbumPrompt(lower string) bool {
 		}
 	}
 	return false
-}
-
-func isTasteRefinementPrompt(lower string) bool {
-	if lower == "" {
-		return false
-	}
-	cues := []string{
-		"less ",
-		"more ",
-		"not too",
-		"warmer",
-		"colder",
-		"darker",
-		"lighter",
-		"more intimate",
-		"less canonical",
-		"more lived-in",
-		"more lived in",
-	}
-	for _, cue := range cues {
-		if strings.Contains(lower, cue) {
-			return true
-		}
-	}
-	return false
-}
-
-func wantsCreativeRiskierChoice(lower string) bool {
-	return strings.Contains(lower, "riskier") || strings.Contains(lower, "braver") || strings.Contains(lower, "bolder")
-}
-
-func wantsListeningTasteInterpretation(lower string) bool {
-	return strings.Contains(lower, "what does that say about my taste") ||
-		strings.Contains(lower, "what does that say about my taste right now") ||
-		strings.Contains(lower, "what does that mean for my taste") ||
-		strings.Contains(lower, "what does that mean about my taste")
-}
-
-func wantsListeningDominanceAnswer(lower string) bool {
-	return strings.Contains(lower, "dominant") ||
-		strings.Contains(lower, "dominating") ||
-		strings.Contains(lower, "versus the rest") ||
-		strings.Contains(lower, "overrepresented")
 }
 
 func (s *Server) buildUnderplayedAlbumCandidates(ctx context.Context, rawMsg string, limit int) ([]creativeAlbumCandidate, error) {
@@ -289,26 +357,6 @@ func respondToCreativeAlbumRecencyFollowUp(lower string, candidates []creativeAl
 		}
 		return fmt.Sprintf("The one you've touched most recently is %s.", formatCreativeAlbumCandidate(latest, true)), true
 	}
-	if strings.Contains(lower, "played this year") {
-		start := time.Date(time.Now().UTC().Year(), time.January, 1, 0, 0, 0, 0, time.UTC)
-		matches := filterCreativeCandidatesByLastPlayed(candidates, func(ts time.Time) bool {
-			return !ts.Before(start)
-		})
-		if len(matches) == 0 {
-			return "None of those show a play timestamp from this year.", true
-		}
-		return renderCreativeAlbumSet("From those, these show a play timestamp this year", matches, 4), true
-	}
-	if strings.Contains(lower, "played recently") {
-		cutoff := time.Now().UTC().AddDate(0, 0, -30)
-		matches := filterCreativeCandidatesByLastPlayed(candidates, func(ts time.Time) bool {
-			return !ts.Before(cutoff)
-		})
-		if len(matches) == 0 {
-			return "None of those look recently played in the last 30 days.", true
-		}
-		return renderCreativeAlbumSet("From those, these look recently played", matches, 4), true
-	}
 	return "", false
 }
 
@@ -358,6 +406,73 @@ func chooseRiskierCreativeCandidate(candidates []creativeAlbumCandidate) (creati
 		}
 	}
 	return best, true
+}
+
+func chooseSaferCreativeCandidate(candidates []creativeAlbumCandidate) (creativeAlbumCandidate, bool) {
+	if len(candidates) == 0 {
+		return creativeAlbumCandidate{}, false
+	}
+	best := candidates[0]
+	bestScore := creativeRiskScore(best)
+	for _, candidate := range candidates[1:] {
+		score := creativeRiskScore(candidate)
+		if score < bestScore {
+			best = candidate
+			bestScore = score
+		}
+	}
+	return best, true
+}
+
+func creativeCandidatesFromResolvedReference(sessionID string, resolved *resolvedTurnContext) ([]creativeAlbumCandidate, string, bool) {
+	if resolved == nil {
+		return nil, "", false
+	}
+	ref := resolved.resultReference()
+	switch ref.effectiveSetKind() {
+	case "", "creative_albums":
+		candidates, updatedAt, mode, _ := getLastCreativeAlbumSet(sessionID)
+		if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextCreativeAlbumTTL {
+			return nil, "", false
+		}
+		return candidates, mode, true
+	case "semantic_albums":
+		matches, updatedAt, queryText := getLastSemanticAlbumSearch(sessionID)
+		if len(matches) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextSemanticAlbumTTL {
+			return nil, "", false
+		}
+		mode := "semantic_album_search"
+		if strings.TrimSpace(queryText) != "" {
+			mode = strings.TrimSpace(queryText)
+		}
+		return semanticMatchesToCreativeCandidates(matches), mode, true
+	default:
+		return nil, "", false
+	}
+}
+
+func resolvedCreativeReferenceKind(resolved *resolvedTurnContext) string {
+	if resolved == nil {
+		return "creative_albums"
+	}
+	ref := resolved.resultReference()
+	if ref.effectiveSetKind() == "" {
+		return "creative_albums"
+	}
+	return ref.effectiveSetKind()
+}
+
+func narrowCreativeCandidatesToFocusedItem(candidates []creativeAlbumCandidate, focusedKey string) []creativeAlbumCandidate {
+	focusedKey = strings.TrimSpace(focusedKey)
+	if focusedKey == "" || len(candidates) == 0 {
+		return candidates
+	}
+	for _, candidate := range candidates {
+		if normalizedCreativeAlbumCandidateKey(candidate) == focusedKey {
+			return []creativeAlbumCandidate{candidate}
+		}
+	}
+	return nil
 }
 
 func creativeRiskScore(candidate creativeAlbumCandidate) float64 {

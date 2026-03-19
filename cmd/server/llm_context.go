@@ -13,6 +13,7 @@ const llmContextPlaylistTTL = 30 * time.Minute
 const llmContextSemanticAlbumTTL = 30 * time.Minute
 const llmContextCreativeAlbumTTL = 30 * time.Minute
 const llmContextRecentListeningTTL = 30 * time.Minute
+const llmContextSongPathTTL = 30 * time.Minute
 
 func (s *Server) buildLLMSessionContext(sessionID string) string {
 	sessionID = normalizeChatSessionID(sessionID)
@@ -55,6 +56,11 @@ func (s *Server) buildLLMSessionContext(sessionID string) string {
 	}
 	if state, ok := getLastSceneSelection(sessionID); ok {
 		if section := formatSceneSelectionContext(state, now); section != "" {
+			sections = append(sections, section)
+		}
+	}
+	if state, ok := getLastSongPath(sessionID); ok {
+		if section := formatSongPathContext(state, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
@@ -277,6 +283,35 @@ func formatRecentListeningContext(state recentListeningState, now time.Time) str
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+func formatSongPathContext(state songPathState, now time.Time) string {
+	if state.updatedAt.IsZero() || now.Sub(state.updatedAt) > llmContextSongPathTTL || len(state.path) == 0 {
+		return ""
+	}
+	middle := state.path[len(state.path)/2]
+	parts := []string{
+		fmt.Sprintf("last_song_path: count=%d", len(state.path)),
+		fmt.Sprintf("start=%q", formatSongPathTrack(state.start)),
+		fmt.Sprintf("end=%q", formatSongPathTrack(state.end)),
+		fmt.Sprintf("middle=%q", formatSongPathTrack(middle)),
+	}
+	if len(state.path) > 2 {
+		sample := []string{formatSongPathTrack(state.path[0]), formatSongPathTrack(middle), formatSongPathTrack(state.path[len(state.path)-1])}
+		parts = append(parts, fmt.Sprintf("sample=%q", strings.Join(sample, " | ")))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatSongPathTrack(track songPathTrack) string {
+	label := strings.TrimSpace(track.Title)
+	if artist := strings.TrimSpace(track.ArtistName); artist != "" {
+		label += " by " + artist
+	}
+	if album := strings.TrimSpace(track.AlbumName); album != "" {
+		label += " [" + album + "]"
+	}
+	return strings.TrimSpace(label)
 }
 
 func formatLidarrCleanupContext(updatedAt time.Time, candidates []lidarrCleanupCandidate, now time.Time) string {

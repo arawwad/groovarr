@@ -48,6 +48,57 @@ func TestDescribeRecentListeningDominance(t *testing.T) {
 	}
 }
 
+func TestChooseSaferCreativeCandidate(t *testing.T) {
+	pick, ok := chooseSaferCreativeCandidate([]creativeAlbumCandidate{
+		{Name: "Risky", ArtistName: "Artist A", Genre: "experimental noise", PlayCount: 0},
+		{Name: "Safer", ArtistName: "Artist B", Genre: "pop", PlayCount: 12},
+	})
+	if !ok {
+		t.Fatal("expected safer pick")
+	}
+	if pick.Name != "Safer" {
+		t.Fatalf("chooseSaferCreativeCandidate() = %#v, want Safer", pick)
+	}
+}
+
+func TestCreativeCandidatesFromResolvedReferenceUsesSemanticSet(t *testing.T) {
+	lastSemanticAlbumSearch.mu.Lock()
+	lastSemanticAlbumSearch.sessions[normalizeChatSessionID("session-semantic-ref")] = semanticAlbumSearchState{
+		queryText: "dreamy albums",
+		updatedAt: time.Now().UTC(),
+		matches: []semanticAlbumSearchMatch{
+			{Name: "Moon Safari", ArtistName: "Air"},
+		},
+	}
+	lastSemanticAlbumSearch.mu.Unlock()
+
+	candidates, mode, ok := creativeCandidatesFromResolvedReference("session-semantic-ref", &resolvedTurnContext{
+		ResolvedReferenceKind: "semantic_albums",
+		HasSemanticAlbumSet:   true,
+	})
+	if !ok {
+		t.Fatal("expected semantic reference to resolve")
+	}
+	if mode != "dreamy albums" {
+		t.Fatalf("mode = %q, want semantic query text", mode)
+	}
+	if len(candidates) != 1 || candidates[0].Name != "Moon Safari" {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+}
+
+func TestNarrowCreativeCandidatesToFocusedItem(t *testing.T) {
+	candidates := []creativeAlbumCandidate{
+		{Name: "A", ArtistName: "Artist A"},
+		{Name: "B", ArtistName: "Artist B"},
+	}
+	focused := normalizedCreativeAlbumCandidateKey(creativeAlbumCandidate{Name: "B", ArtistName: "Artist B"})
+	narrowed := narrowCreativeCandidatesToFocusedItem(candidates, focused)
+	if len(narrowed) != 1 || narrowed[0].Name != "B" {
+		t.Fatalf("narrowCreativeCandidatesToFocusedItem() = %#v", narrowed)
+	}
+}
+
 func TestFormatCreativeAlbumCandidateIncludesPlayContext(t *testing.T) {
 	got := formatCreativeAlbumCandidate(creativeAlbumCandidate{
 		Name:       "Teachings in Silence",

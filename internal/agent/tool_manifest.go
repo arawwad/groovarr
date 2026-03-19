@@ -17,11 +17,27 @@ type toolManifestPrompt struct {
 	Content    string
 }
 
-func buildToolManifestPrompt(userMsg string, history []Message) toolManifestPrompt {
-	return buildToolManifestPromptForMode(userMsg, history, toolManifestMode())
+type TurnSignals struct {
+	Intent                 string
+	QueryScope             string
+	FollowupMode           string
+	LibraryOnly            bool
+	HasCreativeAlbumSet    bool
+	HasSemanticAlbumSet    bool
+	HasDiscoveredAlbums    bool
+	HasRecentListening     bool
+	HasPendingPlaylistPlan bool
+	HasResolvedScene       bool
+	HasSongPath            bool
+	HasTrackCandidates     bool
+	HasArtistCandidates    bool
 }
 
-func buildToolManifestPromptForMode(userMsg string, history []Message, mode string) toolManifestPrompt {
+func buildToolManifestPrompt(userMsg string, history []Message, signals *TurnSignals) toolManifestPrompt {
+	return buildToolManifestPromptForMode(userMsg, history, signals, toolManifestMode())
+}
+
+func buildToolManifestPromptForMode(userMsg string, history []Message, signals *TurnSignals, mode string) toolManifestPrompt {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case toolManifestModeFull:
 		categories := toolspec.PromptCategoryNames()
@@ -30,7 +46,7 @@ func buildToolManifestPromptForMode(userMsg string, history []Message, mode stri
 			Content:    toolspec.RenderPromptCatalog(toolspec.PromptCatalogForCategories(categories)),
 		}
 	default:
-		categories := selectPromptCategories(userMsg, history)
+		categories := selectPromptCategories(userMsg, history, signals)
 		return toolManifestPrompt{
 			Categories: categories,
 			Content:    toolspec.RenderPromptCatalog(toolspec.PromptCatalogForCategories(categories)),
@@ -47,10 +63,11 @@ func toolManifestMode() string {
 	}
 }
 
-func selectPromptCategories(userMsg string, history []Message) []string {
+func selectPromptCategories(userMsg string, history []Message, signals *TurnSignals) []string {
 	selected := make(map[string]struct{}, 8)
 	addPromptCategories(selected, defaultPromptCategories())
 	addPromptCategories(selected, inferPromptCategories(userMsg))
+	addPromptCategories(selected, inferPromptCategoriesFromSignals(signals))
 	if shouldRouteFromHistory(userMsg) {
 		for _, content := range recentHistoryContents(history, 4) {
 			addPromptCategories(selected, inferPromptCategories(content))
@@ -94,6 +111,55 @@ func inferPromptCategories(text string) []string {
 		}
 	}
 
+	return categorySetToSlice(selected)
+}
+
+func inferPromptCategoriesFromSignals(signals *TurnSignals) []string {
+	if signals == nil {
+		return nil
+	}
+	selected := make(map[string]struct{}, 8)
+	switch {
+	case strings.EqualFold(strings.TrimSpace(signals.Intent), "album_discovery"):
+		selected[toolspec.CategoryDiscovery] = struct{}{}
+	case strings.EqualFold(strings.TrimSpace(signals.Intent), "track_discovery"):
+		selected[toolspec.CategorySemanticSearch] = struct{}{}
+		selected[toolspec.CategorySimilarity] = struct{}{}
+	case strings.EqualFold(strings.TrimSpace(signals.Intent), "artist_discovery"):
+		selected[toolspec.CategorySimilarity] = struct{}{}
+	case strings.EqualFold(strings.TrimSpace(signals.Intent), "scene_discovery"):
+		selected[toolspec.CategorySimilarity] = struct{}{}
+	case strings.EqualFold(strings.TrimSpace(signals.Intent), "stats"):
+		selected[toolspec.CategoryLibraryAnalytics] = struct{}{}
+	case strings.EqualFold(strings.TrimSpace(signals.Intent), "playlist"):
+		selected[toolspec.CategoryPlaylistState] = struct{}{}
+		selected[toolspec.CategoryPlaylistPlanning] = struct{}{}
+	case strings.EqualFold(strings.TrimSpace(signals.Intent), "listening"):
+		selected[toolspec.CategoryListening] = struct{}{}
+	}
+	if strings.EqualFold(strings.TrimSpace(signals.QueryScope), "library") || signals.LibraryOnly {
+		selected[toolspec.CategorySemanticSearch] = struct{}{}
+		selected[toolspec.CategoryLibraryBrowse] = struct{}{}
+	}
+	if signals.HasRecentListening || strings.EqualFold(strings.TrimSpace(signals.QueryScope), "listening") {
+		selected[toolspec.CategoryListening] = struct{}{}
+	}
+	if signals.HasCreativeAlbumSet || signals.HasSemanticAlbumSet {
+		selected[toolspec.CategorySemanticSearch] = struct{}{}
+		selected[toolspec.CategoryDiscovery] = struct{}{}
+	}
+	if signals.HasTrackCandidates || signals.HasArtistCandidates {
+		selected[toolspec.CategorySimilarity] = struct{}{}
+		selected[toolspec.CategorySemanticSearch] = struct{}{}
+	}
+	if signals.HasPendingPlaylistPlan {
+		selected[toolspec.CategoryPlaylistState] = struct{}{}
+		selected[toolspec.CategoryPlaylistPlanning] = struct{}{}
+	}
+	if strings.EqualFold(strings.TrimSpace(signals.FollowupMode), "query_previous_set") || strings.EqualFold(strings.TrimSpace(signals.FollowupMode), "refine_previous") {
+		selected[toolspec.CategorySemanticSearch] = struct{}{}
+		selected[toolspec.CategoryListening] = struct{}{}
+	}
 	return categorySetToSlice(selected)
 }
 
