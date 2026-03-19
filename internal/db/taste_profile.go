@@ -332,6 +332,62 @@ func (c *Client) GetAlbumTasteFeatures(ctx context.Context, albumIDs []string) (
 	return out, nil
 }
 
+func (c *Client) ListAlbumTasteFeatures(ctx context.Context, limit int) ([]TasteProfileAlbumFeature, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	rows, err := c.pool.Query(
+		ctx,
+		`SELECT
+			scope,
+			album_id,
+			album_name,
+			artist_name,
+			total_plays,
+			recent_plays,
+			last_played,
+			rating,
+			overexposure_score,
+			updated_at
+		FROM taste_profile_album_features
+		WHERE scope = $1
+		ORDER BY overexposure_score ASC, recent_plays ASC, total_plays ASC, last_played ASC NULLS FIRST, album_name ASC
+		LIMIT $2`,
+		defaultTasteProfileScope,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]TasteProfileAlbumFeature, 0, limit)
+	for rows.Next() {
+		var item TasteProfileAlbumFeature
+		var lastPlayed sql.NullTime
+		if err := rows.Scan(
+			&item.Scope,
+			&item.AlbumID,
+			&item.AlbumName,
+			&item.ArtistName,
+			&item.TotalPlays,
+			&item.RecentPlays,
+			&lastPlayed,
+			&item.Rating,
+			&item.OverexposureScore,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.LastPlayed = nullTimePtr(lastPlayed)
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *Client) collectTasteProfileSummary(ctx context.Context) (*TasteProfileSummary, error) {
 	artistKeyExpr := normalizedArtistKeySQL("artist_name")
 	query := fmt.Sprintf(`SELECT

@@ -69,7 +69,10 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 		"If no listed tool fits, ask one concise clarifying question instead of inventing a tool.",
 		"Do not answer library-stat or library-count questions from model memory.",
 		"For exact counts, prefer stats or facet tools over counting a capped list.",
+		"Server session context may include authoritative cached result sets.",
 		"Reuse prior artists or albums in follow-ups, and prefer multi-value tool args when available.",
+		`For follow-ups like "those" or "which of those", stay anchored to the available history or session result set.`,
+		"If a follow-up depends on a prior result set you do not actually have in history or session context, ask one concise clarifying question.",
 		"Preserve the original subject when narrowing prior recommendation or semantic-search results, then add explicit filters.",
 		"For decade/year follow-ups on semanticAlbumSearch, keep queryText and add minYear/maxYear.",
 		"Preserve explicit song and album title qualifiers from the user verbatim when they matter, including mixes, live versions, remasters, demos, and parenthetical subtitles.",
@@ -77,17 +80,26 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 		"Never invent, rewrite, or approximate a sceneKey from a scene name, subtitle, or mood words.",
 		"If you do not already have an authoritative sceneKey and the scene name may be ambiguous, ask one concise clarifying question instead of fabricating a backend-style key.",
 		"Recommendations are global by default. Use discoverAlbums unless the user explicitly limits them to their library.",
-		`For "best/top/essential <artist>" prompts, use discoverAlbums unless the user says "in my library"; then use albums.`,
+		`For "best/top/essential <artist>" prompts without an ownership cue, ask whether the user wants general picks or albums from their library before choosing discoverAlbums vs albums.`,
 		"For library-only vibe recommendations, prefer semanticAlbumSearch over albums or discoverAlbums.",
+		`Treat vague recent phrases like "lately" or "recently" as last month unless the user asks for another window.`,
 		"Do not invent tool names, arg names, filter keys, or enum values.",
 		"If you cannot identify one best tool with valid arguments, ask a clarifying question.",
 		`If the user asks for vague "stats", ask whether they mean library composition or listening over time.`,
+		"For playlist creation requests, including when the user already provides the exact songs they want, use the playlist preview tool rather than replying with a manual availability-confirmation step.",
+		"Do not ask to confirm whether requested playlist tracks are available before using the playlist preview tool; the preview flow already resolves availability and missing tracks.",
+		"If the user asks to make a playlist without a mood, theme, purpose, seed artist, or songs, ask what kind of playlist they want instead of inventing a generic default.",
 		"Tool groups:",
 		"Detailed tool names and args are injected separately for the relevant groups on each turn.",
 		"Library Browse: Library totals plus artist, album, and track lookups.",
 		"Playlist Planning: Preview creating, extending, refreshing, or repairing playlists.",
 		"Decision examples:",
 		`If the user asks "Give me artist stats.", ask whether they mean library composition or listening over time.`,
+		`If the user asks for "best/top/essential <artist> albums" without saying whether they mean general or owned albums, ask which scope they want before choosing a tool.`,
+		`Treat vague recent phrases like "lately" or "recently" as last month by default.`,
+		`If the user asks "Make me a playlist" with no other direction, ask what kind of playlist they want.`,
+		"If the user asks to make a playlist and already names the songs they want, call the playlist preview tool with that request instead of asking to check availability first.",
+		`If the user asks "Which of those have I played recently?", use the prior result set when available; otherwise ask which items they mean.`,
 		"If the user gives a fully specified track title with a version qualifier, keep that exact title when calling a track or song-path tool.",
 		"If the user refers to a sonic scene loosely and there is no exact prior sceneKey in context, ask which scene they mean rather than synthesizing a sceneKey.",
 		"Preview before state-changing operations.",
@@ -101,7 +113,7 @@ func TestBuildSystemPromptUsesManifestGuidance(t *testing.T) {
 
 func TestBuildSystemPromptIsCompact(t *testing.T) {
 	got := buildSystemPrompt()
-	if len(got) > 7000 {
+	if len(got) > 7500 {
 		t.Fatalf("buildSystemPrompt() too long: %d chars", len(got))
 	}
 }
@@ -155,6 +167,27 @@ func TestBuildToolManifestPromptRoutesAnalyticsPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt.Content, "artistLibraryStats: Artist-level library composition stats.") {
 		t.Fatalf("manifest = %q", prompt.Content)
+	}
+}
+
+func TestBuildToolManifestPromptRoutesExplicitPlaylistSongListPrompt(t *testing.T) {
+	prompt := buildToolManifestPromptForMode(
+		"Create a playlist for these Radiohead songs: Lift, 15 Step, Separator, Lotus Flower",
+		nil,
+		toolManifestModeRouted,
+	)
+	if !strings.Contains(strings.Join(prompt.Categories, ","), "Playlist Planning") {
+		t.Fatalf("categories = %v, want Playlist Planning", prompt.Categories)
+	}
+	required := []string{
+		"startPlaylistCreatePreview: Preview a new playlist, including one built from an explicit song list.",
+		"Default for playlist creation, including when the user already names the exact songs they want.",
+		"do not ask for a separate availability check first",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(prompt.Content, fragment) {
+			t.Fatalf("manifest = %q, missing %q", prompt.Content, fragment)
+		}
 	}
 }
 

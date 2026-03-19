@@ -236,7 +236,44 @@ curl -sS --json '{"message":"Narrow that to the 90s.","sessionId":"e2e-session-o
 Interpretation:
 - if this fails while the explicit-history version works, the issue is chat-memory scope, not the core semantic tool path
 
-### 7. Playlist Reads
+### 7. Session Result-Set Follow-Up Check
+
+This is the "use tools intelligently after a prior answer" probe.
+
+```bash
+curl -sS --json '{"message":"Find me some melancholic dream pop albums in my library.","sessionId":"e2e-result-followup"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Which of those have I played recently?","sessionId":"e2e-result-followup"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- follow-up stays anchored to the prior candidate set
+- may call additional tools for play history or album details
+- should not restart from scratch or answer with unrelated albums
+
+### 8. Context Switch Check
+
+This catches stale-topic contamination in longer sessions.
+
+```bash
+curl -sS --json '{"message":"What are my top artists from the last month?","sessionId":"e2e-context-switch"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Switching gears: what playlists do I have?","sessionId":"e2e-context-switch"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- second turn routes to playlist inventory
+- should not stay stuck on stats or require irrelevant clarification
+
+### 9. Playlist Reads
 
 ```bash
 curl -sS --json '{"message":"What playlists do I have?","sessionId":"e2e-playlists"}' \
@@ -252,7 +289,7 @@ Expected:
 - grounded playlist inventory
 - no pending action
 
-### 8. Playlist Append Preview
+### 10. Playlist Append Preview
 
 ```bash
 curl -sS --json '{"message":"Add five colder tracks to the existing playlist Melancholy Jazz","sessionId":"e2e-playlist-append"}' \
@@ -264,7 +301,7 @@ Expected:
 - response includes `pendingAction`
 - `pendingAction.kind` is `playlist_append`
 
-### 9. Playlist Create Preview
+### 11. Playlist Create Preview
 
 ```bash
 curl -sS --json '{"message":"Make me a melancholy jazz playlist for late nights.","sessionId":"e2e-playlist-create"}' \
@@ -289,7 +326,7 @@ Interpretation:
 - this is the hard gate for conversational, zero-config playlist work
 - do not expand playlist scope until this gate is stable
 
-### 10. Pending Action Approve / Discard
+### 12. Pending Action Approve / Discard
 
 After any preview response, copy `pendingAction.id`.
 
@@ -324,7 +361,19 @@ Expected:
 - discard clears it
 - unrelated later replies should not leak the old `pendingAction`
 
-### 11. Playlist Refresh Preview
+Discard cleanup follow-up:
+
+```bash
+curl -sS --json '{"message":"Hi again.","sessionId":"e2e-playlist-create"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Expected:
+- normal fresh reply
+- no stale preview recap
+- no `pendingAction`
+
+### 13. Playlist Refresh Preview
 
 ```bash
 curl -sS --json '{"message":"Refresh the playlist Melancholy Jazz","sessionId":"e2e-playlist-refresh"}' \
@@ -348,7 +397,7 @@ Expected:
 - asks which playlist to refresh
 - should not invent a playlist target
 
-### 12. Playlist Repair Preview
+### 14. Playlist Repair Preview
 
 ```bash
 curl -sS --json '{"message":"Repair the playlist Melancholy Jazz","sessionId":"e2e-playlist-repair"}' \
@@ -395,9 +444,11 @@ curl -sS --json '{"message":"Make me a playlist","sessionId":"e2e-playlist-clari
 Expected:
 - either asks one concise clarifying question
 - or applies a clearly defensible zero-config default
+- if it chooses a zero-config default, the plan should look personalized and plausible
+- should not fall back to a generic `New Playlist` plus mostly missing filler tracks
 - should not dump configuration options at the user
 
-### 13. Removal Preview
+### 15. Removal Preview
 
 ```bash
 curl -sS --json '{"message":"Remove Warpaint from my library","sessionId":"e2e-remove"}' \
@@ -408,7 +459,7 @@ Expected:
 - safe preview flow only
 - if not found in Lidarr, responds clearly without a destructive action
 
-### 14. Badly Rated Albums
+### 16. Badly Rated Albums
 
 Read-only query:
 
@@ -443,6 +494,156 @@ Expected when there are no prior results:
 - should not imply that a delete will happen
 - should direct the user to query badly rated albums first
 
+## Exploratory Multi-Turn Sessions
+
+These are not strict goldens. Use them to find where the assistant becomes shallow,
+overconfident, repetitive, or loses the thread.
+
+Grade these by conversational quality:
+- does it understand the user's real goal, not just keywords
+- does it ask for clarification only when it materially helps
+- does it stay grounded when the user says `those`, `that`, or `the riskier one`
+- does it pivot cleanly when the topic changes
+- does it distinguish grounded facts from taste-level inference
+- does it fail gracefully when results are weak or tools are incomplete
+
+### A. Taste Refinement Inside Album Discovery
+
+```bash
+curl -sS --json '{"message":"I want something like Air but sadder and more nocturnal.","sessionId":"explore-discovery-refine"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Keep it in my library.","sessionId":"explore-discovery-refine"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"From those, which have I actually played this year?","sessionId":"explore-discovery-refine"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+What to look for:
+- first turn can recommend, clarify, or search, but should not feel generic
+- second turn should narrow the prior idea into owned-library results rather than restarting
+- third turn should stay anchored to the prior candidate set
+- if evidence is missing, it should say so plainly instead of bluffing
+
+### B. Underplayed Albums With Taste Shaping
+
+```bash
+curl -sS --json '{"message":"Surprise me with 3 records I own but probably underplay.","sessionId":"explore-underplayed"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Make that less electronic and more intimate.","sessionId":"explore-underplayed"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Which one of those have I touched most recently?","sessionId":"explore-underplayed"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+What to look for:
+- first turn should blend library ownership with some notion of low play frequency
+- the refinement turn should preserve the original task and only reshape the taste target
+- the final turn should answer from the prior set, not from a random fresh search
+
+### C. Listening Summary To Taste Interpretation
+
+```bash
+curl -sS --json '{"message":"What have I been listening to lately?","sessionId":"explore-listening-interpret"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"What does that say about my taste right now?","sessionId":"explore-listening-interpret"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Give me two albums from my library that fit that pattern but aren't the obvious picks.","sessionId":"explore-listening-interpret"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+What to look for:
+- first turn should be grounded in actual listening data
+- second turn may infer, but should stay close to the evidence and avoid overclaiming
+- third turn should carry forward the inferred taste direction without forgetting the library-only constraint
+
+### D. Ambiguous Stats Conversation
+
+```bash
+curl -sS --json '{"message":"Give me stats on what I have been into lately.","sessionId":"explore-stats-ambiguous"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+If it clarifies, answer with:
+
+```bash
+curl -sS --json '{"message":"Listening, not library.","sessionId":"explore-stats-ambiguous"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+Then continue:
+
+```bash
+curl -sS --json '{"message":"And which artists look unusually dominant versus the rest?","sessionId":"explore-stats-ambiguous"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+What to look for:
+- opening turn should clarify if needed, but not dump options
+- once scope is resolved, it should answer directly
+- follow-up should deepen the same thread rather than restarting the whole stats answer
+
+### E. Clean Topic Pivot In One Session
+
+```bash
+curl -sS --json '{"message":"What are my top artists from the last month?","sessionId":"explore-pivot"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Forget stats for a second. Find me two albums in my library for a predawn drive.","sessionId":"explore-pivot"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Pick the riskier one.","sessionId":"explore-pivot"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+What to look for:
+- the pivot should be immediate and clean
+- the final turn should stay anchored to the two prior albums
+- the assistant should be able to make a light judgment call without inventing new candidates
+
+### F. Clarification Quality, Not Just Clarification Existence
+
+```bash
+curl -sS --json '{"message":"Best albums.","sessionId":"explore-clarify-quality"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"In my library.","sessionId":"explore-clarify-quality"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+```bash
+curl -sS --json '{"message":"Less canonical. More lived-in.","sessionId":"explore-clarify-quality"}' \
+  http://127.0.0.1:7077/api/chat
+```
+
+What to look for:
+- the first clarification should narrow the problem, not just ask a generic question
+- the follow-up should use the user-provided clarification without losing momentum
+- the third turn should interpret soft taste language reasonably well
+
 ## Broad Regression Prompt Set
 
 Use this batch after meaningful changes:
@@ -450,6 +651,7 @@ Use this batch after meaningful changes:
 - `Hi there.`
 - `Give me artist stats.`
 - `What are my top artists from the last month?`
+- `Switching gears: what playlists do I have?`
 - `How many Pink Floyd albums are in my library?`
 - `How many albums do Radiohead and The Beatles have in my library combined?`
 - `Do I have Heart-Shaped Box by Nirvana in my library?`
@@ -459,8 +661,11 @@ Use this batch after meaningful changes:
 - `Give me three records for a rainy late-night walk.`
 - `Give me three records for a rainy late-night walk, but only from my library.`
 - `Find me some melancholic dream pop albums in my library.`
+- `Which of those have I played recently?` after the prior prompt in the same session
 - `Make me a melancholy jazz playlist for late nights.`
+- `Make me a playlist`
 - `Add five colder tracks to the existing playlist Melancholy Jazz`
+- `Hi again.` after discarding a pending action in the same session
 - `Remove Warpaint from my library`
 - `Do I have any badly rated albums?`
 

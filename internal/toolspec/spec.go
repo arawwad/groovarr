@@ -137,7 +137,7 @@ func PromptCatalog() []ToolSpec {
 			Category:    CategoryListening,
 			Name:        "recentListeningSummary",
 			Description: "Summaries for a listening window with top tracks and artists heard.",
-			UseWhen:     "The user asks what they listened to in a recent period.",
+			UseWhen:     `The user asks what they listened to in a recent period. For vague recency phrases like "lately" or "recently", prefer a sensible default such as last_month rather than an invalid custom window.`,
 			Args: []ToolArgSpec{
 				{Name: "window", Type: "string", Description: "Named window such as last_week or last_month. Do not combine with playedSince/playedUntil."},
 				{Name: "playedSince", Type: "string", Description: "Lower bound time. If set, playedUntil must also be set."},
@@ -253,7 +253,7 @@ func PromptCatalog() []ToolSpec {
 			Category:    CategoryDiscovery,
 			Name:        "discoverAlbums",
 			Description: "Discover albums beyond the user's current library.",
-			UseWhen:     "Default recommendation tool for best, top, essential, mood, artist-discography, or 'like X but more Y' album requests unless the user explicitly wants only library-owned results.",
+			UseWhen:     `Default recommendation tool for best, top, essential, mood, artist-discography, or "like X but more Y" album requests when the user clearly wants global recommendations. If an opening-turn prompt like "best Bjork albums" could mean either general picks or only owned albums, ask one concise scope clarification first.`,
 			Args: []ToolArgSpec{
 				{Name: "query", Type: "string", Required: true, Description: "Discovery request."},
 				{Name: "limit", Type: "number", Description: "Maximum results."},
@@ -294,10 +294,10 @@ func PromptCatalog() []ToolSpec {
 		{
 			Category:    CategoryPlaylistPlanning,
 			Name:        "startPlaylistCreatePreview",
-			Description: "Preview a new playlist.",
-			UseWhen:     "Default for playlist creation.",
+			Description: "Preview a new playlist, including one built from an explicit song list.",
+			UseWhen:     "Default for playlist creation, including when the user already names the exact songs they want. This preview already resolves library availability and missing tracks, so do not ask for a separate availability check first. If the user gives no theme, purpose, mood, seed artist, or songs, ask one concise clarifying question before using this tool.",
 			Args: []ToolArgSpec{
-				{Name: "prompt", Type: "string", Required: true, Description: "Playlist request."},
+				{Name: "prompt", Type: "string", Required: true, Description: "Playlist request, which can be a vibe prompt or an explicit list of songs/artists."},
 				{Name: "playlistName", Type: "string", Description: "Optional playlist title."},
 				{Name: "trackCount", Type: "number", Description: "Desired number of tracks."},
 			},

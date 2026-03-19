@@ -135,9 +135,12 @@ func buildSystemPromptSections() []string {
 - The tool manifest may be a routed subset of all available tools.
 - If no listed tool fits, ask one concise clarifying question instead of inventing a tool.
 - Prefer tools over model memory for the user's library, listening history, playlists, pending state, discovered albums, or cleanup state.
+- Server session context may include authoritative cached result sets.
 - Do not answer library-stat or library-count questions from model memory. Use a tool or ask a clarifying question.
 - For exact counts, prefer stats or facet tools over counting a capped list. Do not infer an exact total from a partial list result.
 - Use chat history for follow-ups like "those", "them", "the last one", and "that playlist".
+- For follow-ups like "those" or "which of those", stay anchored to the available history or session result set.
+- If a follow-up depends on a prior result set you do not actually have in history or session context, ask one concise clarifying question.
 - Reuse prior artists or albums in follow-ups, and prefer multi-value tool args when available.
 - Preserve the original subject when narrowing prior recommendation or semantic-search results, then add explicit filters.
 - For decade/year follow-ups on semanticAlbumSearch, keep queryText and add minYear/maxYear.
@@ -149,21 +152,30 @@ func buildSystemPromptSections() []string {
 - If you do not already have an authoritative sceneKey and the scene name may be ambiguous, ask one concise clarifying question instead of fabricating a backend-style key.
 - If you need to look up a scene by a user-facing label, prefer sceneName first and only switch to sceneKey when one was previously returned.
 - Recommendations are global by default. Use discoverAlbums unless the user explicitly limits them to their library.
-- For "best/top/essential <artist>" prompts, use discoverAlbums unless the user says "in my library"; then use albums.
+- For "best/top/essential <artist>" prompts without an ownership cue, ask whether the user wants general picks or albums from their library before choosing discoverAlbums vs albums.
 - For library-only vibe recommendations, prefer semanticAlbumSearch over albums or discoverAlbums.
+- Treat vague recent phrases like "lately" or "recently" as last month unless the user asks for another window.
 - If the user already gave a mood, vibe, or scene, do not ask for another mood clarification unless a required filter is still missing.
 - Do not invent tool names, arg names, filter keys, or enum values.
 - If you cannot identify one best tool with valid arguments, ask a clarifying question.
 - If a tool requires arguments you do not have yet, ask for them before calling the tool.
 - If the user asks for vague "stats", ask whether they mean library composition or listening over time.
 - Preview before state-changing operations. Use preview tools instead of inventing direct actions.
+- For playlist creation requests, including when the user already provides the exact songs they want, use the playlist preview tool rather than replying with a manual availability-confirmation step.
+- Do not ask to confirm whether requested playlist tracks are available before using the playlist preview tool; the preview flow already resolves availability and missing tracks.
+- If the user asks to make a playlist without a mood, theme, purpose, seed artist, or songs, ask what kind of playlist they want instead of inventing a generic default.
 - Similarity tools are only for explicit nearest matches in the user's library, not general recommendations.`,
 		toolspec.RenderPromptCategorySummary(toolspec.PromptCategoryCatalog()),
 		`Decision examples:
 - If the user asks "Give me artist stats.", ask whether they mean library composition or listening over time.
 - If the user asks for an exact count, prefer a stats or facet tool over counting a capped list result.
 - Recommendations are global by default unless the user explicitly limits them to their library.
+- If the user asks for "best/top/essential <artist> albums" without saying whether they mean general or owned albums, ask which scope they want before choosing a tool.
 - Library-only mood or vibe requests should stay inside the owned library rather than switching to global discovery.
+- Treat vague recent phrases like "lately" or "recently" as last month by default.
+- If the user asks "Make me a playlist" with no other direction, ask what kind of playlist they want.
+- If the user asks to make a playlist and already names the songs they want, call the playlist preview tool with that request instead of asking to check availability first.
+- If the user asks "Which of those have I played recently?", use the prior result set when available; otherwise ask which items they mean.
 - If the user gives a fully specified track title with a version qualifier, keep that exact title when calling a track or song-path tool.
 - If the user asks what one specific track sounds like, use describeTrackSound before answering descriptively.
 - If the user refers to a sonic scene loosely and there is no exact prior sceneKey in context, ask which scene they mean rather than synthesizing a sceneKey.
