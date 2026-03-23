@@ -51,11 +51,11 @@ type chatTurnNormalizer interface {
 }
 
 type chatTurnPlanner interface {
-	PlanTurn(ctx context.Context, msg string, history []agent.Message, resolved *resolvedTurnContext, sessionContext string) (orchestrationDecision, error)
+	PlanTurn(ctx context.Context, turn *Turn, history []agent.Message, sessionContext string) (orchestrationDecision, error)
 }
 
 type chatTurnResolver interface {
-	ResolveTurn(ctx context.Context, request resultSetResolverRequest) (resultSetResolverDecision, error)
+	ResolveTurn(ctx context.Context, turn *Turn) (resultSetResolverDecision, error)
 }
 
 type ChatRequest struct {

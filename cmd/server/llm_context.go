@@ -18,6 +18,7 @@ const llmContextSongPathTTL = 30 * time.Minute
 func (s *Server) buildLLMSessionContext(sessionID string) string {
 	sessionID = normalizeChatSessionID(sessionID)
 	now := time.Now().UTC()
+	turnMemory := loadTurnSessionMemory(sessionID)
 
 	sections := make([]string, 0, 5)
 	if memory, ok := s.latestChatSessionMemory(sessionID); ok {
@@ -28,48 +29,60 @@ func (s *Server) buildLLMSessionContext(sessionID string) string {
 	if actionSection := formatPendingActionContext(s.latestPendingAction(sessionID), now); actionSection != "" {
 		sections = append(sections, actionSection)
 	}
-	if prompt, playlistName, plannedAt, candidates := getLastPlannedPlaylist(sessionID); len(candidates) > 0 {
-		resolvedAt, resolved := getLastResolvedPlaylist(sessionID)
+	if prompt, playlistName, plannedAt, candidates, resolvedAt, resolved, ok := turnMemory.PlaylistContext(); ok {
 		if section := formatPlaylistContext(prompt, playlistName, plannedAt, candidates, resolvedAt, resolved, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if matches, updatedAt, queryText := getLastSemanticAlbumSearch(sessionID); updatedAt != (time.Time{}) && strings.TrimSpace(queryText) != "" {
+	if matches, updatedAt, queryText, ok := turnMemory.SemanticAlbumSearch(); ok && updatedAt != (time.Time{}) && strings.TrimSpace(queryText) != "" {
 		if section := formatSemanticAlbumSearchContext(queryText, updatedAt, matches, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if candidates, updatedAt, mode, queryText := getLastCreativeAlbumSet(sessionID); len(candidates) > 0 {
+	if candidates, updatedAt, mode, queryText, ok := turnMemory.CreativeAlbumSet(); ok {
 		if section := formatCreativeAlbumSetContext(mode, queryText, updatedAt, candidates, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if candidates, updatedAt, query := getLastDiscoveredAlbums(sessionID); len(candidates) > 0 {
+	if candidates, updatedAt, query, ok := turnMemory.DiscoveredAlbums(); ok {
 		if section := formatDiscoveredAlbumsContext(query, updatedAt, candidates, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if state, ok := getLastRecentListeningSummary(sessionID); ok {
+	if state, ok := turnMemory.RecentListeningSummary(); ok {
 		if section := formatRecentListeningContext(state, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if state, ok := getLastSceneSelection(sessionID); ok {
+	if state, ok := turnMemory.SceneSelection(); ok {
 		if section := formatSceneSelectionContext(state, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if state, ok := getLastSongPath(sessionID); ok {
+	if state, ok := turnMemory.SongPath(); ok {
 		if section := formatSongPathContext(state, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if candidates, updatedAt := getLastLidarrCandidates(sessionID); len(candidates) > 0 {
+	if candidates, updatedAt, mode, queryText, ok := turnMemory.TrackCandidateSet(); ok {
+		if section := formatTrackCandidateContext(mode, queryText, updatedAt, candidates, now); section != "" {
+			sections = append(sections, section)
+		}
+	}
+	if candidates, updatedAt, queryText, ok := turnMemory.ArtistCandidateSet(); ok {
+		if section := formatArtistCandidateContext(queryText, updatedAt, candidates, now); section != "" {
+			sections = append(sections, section)
+		}
+	}
+	if section := formatFocusedResultItemContext(turnMemory, now); section != "" {
+		sections = append(sections, section)
+	}
+	if candidates, updatedAt, ok := turnMemory.CleanupCandidates(); ok {
 		if section := formatLidarrCleanupContext(updatedAt, candidates, now); section != "" {
 			sections = append(sections, section)
 		}
 	}
-	if candidates, updatedAt := getLastBadlyRatedAlbums(sessionID); len(candidates) > 0 {
+	if candidates, updatedAt, ok := turnMemory.BadlyRatedAlbums(); ok {
 		if section := formatBadlyRatedAlbumsContext(updatedAt, candidates, now); section != "" {
 			sections = append(sections, section)
 		}
@@ -312,6 +325,85 @@ func formatSongPathTrack(track songPathTrack) string {
 		label += " [" + album + "]"
 	}
 	return strings.TrimSpace(label)
+}
+
+func formatTrackCandidateContext(mode, queryText string, updatedAt time.Time, candidates []trackCandidate, now time.Time) string {
+	if len(candidates) == 0 || updatedAt.IsZero() || now.Sub(updatedAt) > llmContextRecentListeningTTL {
+		return ""
+	}
+	sample := make([]string, 0, minInt(len(candidates), 4))
+	for _, candidate := range candidates {
+		if len(sample) >= 4 {
+			break
+		}
+		label := formatTrackCandidate(candidate)
+		if label == "" {
+			continue
+		}
+		sample = append(sample, label)
+	}
+	parts := []string{
+		fmt.Sprintf("last_track_candidates: count=%d", len(candidates)),
+		fmt.Sprintf("mode=%q", strings.TrimSpace(mode)),
+	}
+	if strings.TrimSpace(queryText) != "" {
+		parts = append(parts, fmt.Sprintf("query=%q", strings.TrimSpace(queryText)))
+	}
+	if len(sample) > 0 {
+		parts = append(parts, fmt.Sprintf("sample=%q", strings.Join(sample, " | ")))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatArtistCandidateContext(queryText string, updatedAt time.Time, candidates []artistCandidate, now time.Time) string {
+	if len(candidates) == 0 || updatedAt.IsZero() || now.Sub(updatedAt) > llmContextRecentListeningTTL {
+		return ""
+	}
+	sample := make([]string, 0, minInt(len(candidates), 4))
+	for _, candidate := range candidates {
+		if len(sample) >= 4 {
+			break
+		}
+		label := strings.TrimSpace(candidate.Name)
+		if label == "" {
+			continue
+		}
+		sample = append(sample, label)
+	}
+	parts := []string{
+		fmt.Sprintf("last_artist_candidates: count=%d", len(candidates)),
+	}
+	if strings.TrimSpace(queryText) != "" {
+		parts = append(parts, fmt.Sprintf("query=%q", strings.TrimSpace(queryText)))
+	}
+	if len(sample) > 0 {
+		parts = append(parts, fmt.Sprintf("sample=%q", strings.Join(sample, " | ")))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatFocusedResultItemContext(memory turnSessionMemory, now time.Time) string {
+	state, ok := memory.FocusedResultItem()
+	if !ok {
+		return ""
+	}
+	kind := strings.TrimSpace(state.kind)
+	if kind == "" || strings.TrimSpace(state.key) == "" || state.updatedAt.IsZero() {
+		return ""
+	}
+	ttl := focusedResultItemTTL(kind)
+	if ttl <= 0 || now.Sub(state.updatedAt) > ttl {
+		return ""
+	}
+	label := memory.FocusedResultItemLabel()
+	parts := []string{
+		fmt.Sprintf("focused_result_item: kind=%q", kind),
+		fmt.Sprintf("key=%q", strings.TrimSpace(state.key)),
+	}
+	if label != "" {
+		parts = append(parts, fmt.Sprintf("label=%q", label))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func formatLidarrCleanupContext(updatedAt time.Time, candidates []lidarrCleanupCandidate, now time.Time) string {

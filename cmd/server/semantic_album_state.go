@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"sync"
 	"time"
 )
@@ -32,16 +31,7 @@ var lastSemanticAlbumSearch = semanticAlbumSearchStore{
 }
 
 func setLastSemanticAlbumSearch(sessionID, queryText string, matches []semanticAlbumSearchMatch) {
-	copied := make([]semanticAlbumSearchMatch, len(matches))
-	copy(copied, matches)
-
-	lastSemanticAlbumSearch.mu.Lock()
-	lastSemanticAlbumSearch.sessions[normalizeChatSessionID(sessionID)] = semanticAlbumSearchState{
-		queryText: strings.TrimSpace(queryText),
-		updatedAt: time.Now().UTC(),
-		matches:   copied,
-	}
-	lastSemanticAlbumSearch.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetSemanticAlbumSearch(queryText, matches)
 }
 
 func getLastSemanticAlbumSearch(sessionID string) ([]semanticAlbumSearchMatch, time.Time, string) {

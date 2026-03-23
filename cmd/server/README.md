@@ -28,7 +28,13 @@ This package is still `main`, but the server code is split by domain so routing 
   - pending-action registration, lookup, approval, discard, and request scoping
 - `llm_context.go`
   - session context injection for pending actions and discovered/planned playlist state
+- `chat_session_archive.go`
+  - temporary local JSONL archive plus debug endpoints for inspecting chat sessions, routes, and tools
 
 If a new handler is domain-specific, prefer adding it to the matching `server_*.go` file or `server_normalized_routes.go` instead of rebuilding a catch-all legacy router.
 
 If a new conversational pattern does not fit the current structured fields, update [ORCHESTRATION.md](/home/abdallah/docker/groovarr/cmd/server/ORCHESTRATION.md) before adding raw-text executor heuristics.
+
+Useful temporary debug endpoints:
+- `GET /api/debug/chat-sessions?since=7d&limit=50`
+- `GET /api/debug/chat-sessions/<sessionId>?since=30d`

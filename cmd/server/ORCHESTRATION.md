@@ -38,7 +38,7 @@ This is the front-door semantic contract.
 
 Current fields:
 - `intent`
-  - `album_discovery | listening | stats | playlist | general_chat | other`
+  - `album_discovery | track_discovery | artist_discovery | scene_discovery | listening | stats | playlist | general_chat | other`
 - `subIntent`
   - narrower operation within an intent
 - `styleHints`
@@ -52,15 +52,19 @@ Current fields:
 - `timeWindow`
   - `none | last_month | this_month | this_year | explicit | ambiguous_recent`
 - `resultSetKind`
-  - `none | creative_albums | semantic_albums | discovered_albums | playlist_candidates | recent_listening | scene_candidates`
+  - `none | creative_albums | semantic_albums | discovered_albums | cleanup_candidates | badly_rated_albums | playlist_candidates | recent_listening | scene_candidates | song_path | track_candidates | artist_candidates`
 - `resultAction`
-  - `none | inspect_availability | preview_apply | apply_confirmed | compare | filter_by_play_window | pick_riskier | refine_style | select_candidate`
+  - `none | inspect_availability | preview_apply | apply_confirmed | compare | filter_by_play_window | pick_riskier | refine_style | select_candidate | describe_item`
 - `selectionMode`
   - `none | all | top_n | ordinal | explicit_names | missing_only | count_match`
 - `selectionValue`
   - compact selection payload
+- `compareSelectionMode`
+- `compareSelectionValue`
 - `targetName`
   - explicit playlist or other named target when the user states it directly
+- `artistName`
+- `trackTitle`
 - `promptHint`
   - short append/refine prompt for playlist-style modifications
 - `needsClarification`
@@ -73,9 +77,6 @@ Current fields:
 - `confidence`
   - `low | medium | high`
 - `clarificationPrompt`
-- `targetName`
-- `artistName`
-- `promptHint`
 
 Current supported `subIntent` values:
 - `listening_summary`
@@ -87,6 +88,7 @@ Current supported `subIntent` values:
 - `creative_refinement`
 - `creative_risk_pick`
 - `creative_safe_pick`
+- `scene_overview`
 - `playlist_tracks_query`
 - `playlist_availability`
 - `playlist_append`
@@ -95,6 +97,12 @@ Current supported `subIntent` values:
 - `playlist_vibe`
 - `playlist_artist_coverage`
 - `playlist_queue_request`
+- `track_search`
+- `track_similarity`
+- `track_description`
+- `song_path_summary`
+- `artist_similarity`
+- `artist_starting_album`
 - `lidarr_cleanup_apply`
 - `badly_rated_cleanup`
 - `artist_remove`
@@ -163,6 +171,7 @@ Current fields:
   - `styleHints`
   - `targetName`
   - `artistName`
+  - `trackTitle`
   - `promptHint`
 - `reference`
   - `target`
@@ -178,6 +187,8 @@ Current fields:
   - `action`
   - `selectionMode`
   - `selectionValue`
+  - `compareSelectionMode`
+  - `compareSelectionValue`
 - `session`
   - result-set availability flags
 
@@ -230,6 +241,8 @@ Fields:
 - `operation`
 - `selectionMode`
 - `selectionValue`
+- `compareSelectionMode`
+- `compareSelectionValue`
 - `needsClarification`
 - `clarificationPrompt`
 - `reason`
@@ -249,14 +262,24 @@ Fields:
 - `operation`
 - `selectionMode`
 - `selectionValue`
+- `compareSelectionMode`
+- `compareSelectionValue`
 - `itemKey`
 - `targetName`
 - `artistName`
+- `trackTitle`
 - `promptHint`
 - `timeWindow`
 
 Rule:
 - executor refactors should consume this shape instead of raw turn fields plus ad hoc helper state
+
+## Current Notes
+
+- Compare-style follow-ups on prior result sets are intended to go through the `resolver` stage instead of generic deterministic-first routing.
+- The compare contract is live and now honors explicit primary selectors or focused-item references for the anchor item, not just the comparison target.
+- `song_path` memory can now feed later `track_discovery` follow-ups when the user refers to the midpoint or last focused item from a previously returned path.
+- The remaining edge is richer composite follow-ups where a selector, comparison target, and secondary action are all implied in one short turn.
 
 ## `resolvedTurnContext`
 

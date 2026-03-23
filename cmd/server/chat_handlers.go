@@ -111,7 +111,6 @@ func chatRequestIDFromContext(ctx context.Context) string {
 
 func (s *Server) buildChatResponse(chatCtx context.Context, msg string, history []agent.Message, modelOverride string) (ChatResponse, error) {
 	sessionID := chatSessionIDFromContext(chatCtx)
-	memory := s.hydrateChatSessionMemory(sessionID, history)
 	logChatPipelineStage(chatCtx, "request", map[string]string{
 		"message": msg,
 	})
@@ -122,30 +121,18 @@ func (s *Server) buildChatResponse(chatCtx context.Context, msg string, history 
 		s.rememberChatExchange(sessionID, history, msg, pending.Response)
 		return pending, nil
 	}
-	sessionContext := strings.TrimSpace(s.buildLLMSessionContext(sessionID))
-	resolvedTurn := s.maybeNormalizeTurn(chatCtx, sessionID, msg, history, sessionContext)
-	plan := s.maybePlanTurn(chatCtx, msg, history, resolvedTurn, sessionContext)
-	if plan != nil {
-		if resp, ok := s.executeOrchestrationDecision(chatCtx, msg, history, resolvedTurn, plan); ok {
-			s.rememberChatExchange(sessionID, history, msg, resp.Response)
-			return resp, nil
+
+	turnResp, turn, err := s.buildTurnResponse(chatCtx, msg, history, modelOverride)
+	if err == nil && turn != nil {
+		if s.chatArchive != nil {
+			s.chatArchive.RecordTurn(chatCtx, turn)
 		}
+		if turnResp.Response != "" {
+			s.rememberChatExchange(sessionID, history, msg, turnResp.Response)
+		}
+		return turnResp, nil
 	}
-	if resp, ok := s.tryNormalizedClarification(msg, resolvedTurn); ok {
-		logChatPipelineStage(chatCtx, "normalized_clarification", map[string]string{
-			"response": resp,
-		})
-		s.rememberChatExchange(sessionID, history, msg, resp)
-		return ChatResponse{Response: resp}, nil
-	}
-	if resp, ok := s.tryNormalizedIntentRoute(chatCtx, msg, history, resolvedTurn); ok {
-		logChatPipelineStage(chatCtx, "normalized_route_fallback", map[string]string{
-			"response":           resp.Response,
-			"has_pending_action": boolString(resp.PendingAction != nil),
-		})
-		s.rememberChatExchange(sessionID, history, msg, resp.Response)
-		return resp, nil
-	}
+
 	if resp, ok := s.tryEmbeddingsUnavailableSemanticLibraryQuery(msg); ok {
 		logChatPipelineStage(chatCtx, "embeddings_unavailable", map[string]string{
 			"response": resp,
@@ -154,43 +141,7 @@ func (s *Server) buildChatResponse(chatCtx context.Context, msg string, history 
 		return ChatResponse{Response: resp}, nil
 	}
 
-	agentStartedAt := time.Now().UTC()
-	llmHistory := selectHistoryForLLM(history, memory, msg, envInt("CHAT_LLM_HISTORY_MESSAGES", defaultMaxLLMHistoryMessages))
-	if planContext := strings.TrimSpace(buildOrchestrationDecisionContext(plan)); planContext != "" {
-		llmHistory = append(append([]agent.Message(nil), llmHistory...), agent.Message{
-			Role:    "assistant",
-			Content: planContext,
-		})
-	}
-	if normalizedContext := strings.TrimSpace(buildNormalizedTurnContext(resolvedTurn)); normalizedContext != "" {
-		llmHistory = append(append([]agent.Message(nil), llmHistory...), agent.Message{
-			Role:    "assistant",
-			Content: normalizedContext,
-		})
-	}
-	if sessionContext != "" {
-		llmHistory = append(append([]agent.Message(nil), llmHistory...), agent.Message{
-			Role:    "assistant",
-			Content: sessionContext,
-		})
-	}
-	response, err := s.agent.ProcessQueryWithSignals(chatCtx, msg, llmHistory, modelOverride, buildAgentTurnSignals(resolvedTurn))
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	logChatPipelineStage(chatCtx, "agent", map[string]string{
-		"response": response,
-		"model":    modelOverride,
-	})
-	s.rememberChatExchange(sessionID, history, msg, response)
-	var pendingAction *PendingAction
-	if !agent.IsDefaultFailureResponse(response) {
-		pendingAction = s.maybeBuildPendingAction(chatCtx, agentStartedAt.Add(-2*time.Second), msg)
-	}
-	return ChatResponse{
-		Response:      response,
-		PendingAction: pendingAction,
-	}, nil
+	return turnResp, err
 }
 
 func boolString(v bool) string {

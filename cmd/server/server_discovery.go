@@ -409,6 +409,10 @@ func (s *Server) handleStructuredCreativeLibraryDiscovery(ctx context.Context, r
 	return renderCreativeAlbumSet("From your library", candidates, 3), true
 }
 
+func (s *Server) handleStructuredCreativeLibraryDiscoveryTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredCreativeLibraryDiscovery(ctx, turnToResolvedTurnContext(turn))
+}
+
 type semanticAlbumRouteMatch struct {
 	ID           string
 	Name         string
@@ -530,16 +534,21 @@ func (s *Server) handleStructuredDiscoveredAlbumsApply(ctx context.Context, reso
 	return resp.Response, resp.PendingAction, true
 }
 
+func (s *Server) handleStructuredDiscoveredAlbumsApplyTurn(ctx context.Context, turn *Turn) (string, *PendingAction, bool) {
+	return s.handleStructuredDiscoveredAlbumsApply(ctx, turnToResolvedTurnContext(turn))
+}
+
 func discoveryExecutionHandlers() []serverExecutionHandler {
 	return []serverExecutionHandler{
 		{
 			name: "discovered_albums_availability",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "discovered_albums" &&
 					strings.TrimSpace(request.Operation) == "inspect_availability"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveStructuredDiscoveredAlbumsAvailabilityOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredDiscoveredAlbumsAvailabilityOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}
@@ -551,12 +560,13 @@ func discoveryExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "discovered_albums_apply",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "discovered_albums" &&
 					strings.TrimSpace(request.Operation) == "preview_apply"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveStructuredDiscoveredAlbumsApplyOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredDiscoveredAlbumsApplyOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}
@@ -597,6 +607,10 @@ func (s *Server) handleStructuredDiscoveredAlbumsAvailability(ctx context.Contex
 		return "", false
 	}
 	return renderStructuredDiscoveredAlbumsAvailability(outcome)
+}
+
+func (s *Server) handleStructuredDiscoveredAlbumsAvailabilityTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredDiscoveredAlbumsAvailability(ctx, turnToResolvedTurnContext(turn))
 }
 
 func selectFocusedDiscoveredCandidate(candidates []discoveredAlbumCandidate, focusedKey string) ([]discoveredAlbumCandidate, string, bool) {

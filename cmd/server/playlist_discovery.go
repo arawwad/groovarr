@@ -96,19 +96,7 @@ type pendingPlaylistTrack struct {
 }
 
 func setLastPlannedPlaylist(sessionID, prompt, playlistName string, candidates []playlistCandidateTrack) {
-	copied := make([]playlistCandidateTrack, len(candidates))
-	copy(copied, candidates)
-
-	lastPlaylistDiscovery.mu.Lock()
-	lastPlaylistDiscovery.sessions[normalizeChatSessionID(sessionID)] = playlistDiscoveryState{
-		prompt:       strings.TrimSpace(prompt),
-		playlistName: strings.TrimSpace(playlistName),
-		plannedAt:    time.Now(),
-		candidates:   copied,
-		resolvedAt:   time.Time{},
-		resolved:     nil,
-	}
-	lastPlaylistDiscovery.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetPlannedPlaylist(prompt, playlistName, candidates)
 }
 
 func getLastPlannedPlaylist(sessionID string) (string, string, time.Time, []playlistCandidateTrack) {
@@ -124,15 +112,7 @@ func getLastPlannedPlaylist(sessionID string) (string, string, time.Time, []play
 }
 
 func setLastResolvedPlaylist(sessionID string, items []resolvedPlaylistTrack) {
-	copied := make([]resolvedPlaylistTrack, len(items))
-	copy(copied, items)
-
-	lastPlaylistDiscovery.mu.Lock()
-	state := lastPlaylistDiscovery.sessions[normalizeChatSessionID(sessionID)]
-	state.resolved = copied
-	state.resolvedAt = time.Now()
-	lastPlaylistDiscovery.sessions[normalizeChatSessionID(sessionID)] = state
-	lastPlaylistDiscovery.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetResolvedPlaylist(items)
 }
 
 func getLastResolvedPlaylist(sessionID string) (time.Time, []resolvedPlaylistTrack) {
@@ -1373,7 +1353,10 @@ func resolvePlaylistCandidates(ctx context.Context, client *navidromeClient, sel
 
 func resolvePlaylistTracks(ctx context.Context, args map[string]interface{}) ([]resolvedPlaylistTrack, map[string]interface{}, error) {
 	sessionID := chatSessionIDFromContext(ctx)
-	_, playlistName, plannedAt, candidates := getLastPlannedPlaylist(sessionID)
+	_, playlistName, plannedAt, candidates, _, _, ok := loadTurnSessionMemory(sessionID).PlaylistContext()
+	if !ok {
+		return nil, nil, fmt.Errorf("no playlist plan available")
+	}
 	selected, err := selectPlaylistCandidates(candidates, toolStringArg(args, "selection"))
 	if err != nil {
 		return nil, nil, err
@@ -1429,15 +1412,20 @@ func queueMissingPlaylistTracks(ctx context.Context, args map[string]interface{}
 	}
 
 	sessionID := chatSessionIDFromContext(ctx)
-	_, playlistName, _, _ := getLastPlannedPlaylist(sessionID)
+	_, playlistName, _, _, _, cached, ok := loadTurnSessionMemory(sessionID).PlaylistContext()
+	if !ok {
+		return nil, fmt.Errorf("no playlist plan available")
+	}
 	selection := strings.TrimSpace(toolStringArg(args, "selection"))
 	var resolved []resolvedPlaylistTrack
-	_, cached := getLastResolvedPlaylist(sessionID)
 	if selection == "" || strings.EqualFold(selection, "all") {
 		resolved = cached
 	}
 	if len(resolved) == 0 {
-		_, _, _, candidates := getLastPlannedPlaylist(sessionID)
+		_, _, _, candidates, _, _, ok := loadTurnSessionMemory(sessionID).PlaylistContext()
+		if !ok {
+			return nil, fmt.Errorf("no playlist plan available")
+		}
 		selected, err := selectPlaylistCandidates(candidates, selection)
 		if err != nil {
 			return nil, err
@@ -1485,7 +1473,10 @@ func createDiscoveredPlaylist(ctx context.Context, args map[string]interface{}) 
 	}
 
 	sessionID := chatSessionIDFromContext(ctx)
-	_, defaultPlaylistName, _, candidates := getLastPlannedPlaylist(sessionID)
+	_, defaultPlaylistName, _, candidates, _, _, ok := loadTurnSessionMemory(sessionID).PlaylistContext()
+	if !ok {
+		return nil, fmt.Errorf("no playlist plan available")
+	}
 	selected, err := selectPlaylistCandidates(candidates, toolStringArg(args, "selection"))
 	if err != nil {
 		return nil, err

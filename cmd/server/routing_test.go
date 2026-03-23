@@ -177,8 +177,8 @@ func TestBuildSpecificAlbumDiscoveryArgs(t *testing.T) {
 
 func TestSanitizeNormalizedTurnTrackDiscoveryDefaults(t *testing.T) {
 	got := sanitizeNormalizedTurn("find me a song like windowlicker", normalizedTurn{
-		Intent:    "track_discovery",
-		SubIntent: "track_similarity",
+		Intent:     "track_discovery",
+		SubIntent:  "track_similarity",
 		TrackTitle: "Windowlicker",
 	})
 	if got.QueryScope != "library" {
@@ -197,9 +197,9 @@ func TestResolveTurnContextTrackCandidates(t *testing.T) {
 		{ID: "trk-1", Title: "Track One", ArtistName: "Artist One"},
 	})
 	resolved := resolveTurnContext("track-ref", normalizedTurn{
-		Intent:         "track_discovery",
-		SubIntent:      "track_description",
-		FollowupMode:   "query_previous_set",
+		Intent:          "track_discovery",
+		SubIntent:       "track_description",
+		FollowupMode:    "query_previous_set",
 		ReferenceTarget: "previous_results",
 	})
 	if !resolved.HasTrackCandidates {
@@ -227,6 +227,25 @@ func TestSanitizeOrchestrationDecisionBiasesTrackRouting(t *testing.T) {
 	}
 	if decision.DeterministicMode != "normalized_first" {
 		t.Fatalf("DeterministicMode = %q, want normalized_first", decision.DeterministicMode)
+	}
+}
+
+func TestSanitizeOrchestrationDecisionRoutesCompareToResolver(t *testing.T) {
+	decision := sanitizeOrchestrationDecision(orchestrationDecision{
+		NextStage: "deterministic",
+	}, &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:          "track_discovery",
+			FollowupMode:    "refine_previous",
+			ReferenceTarget: "previous_results",
+			ResultAction:    "compare",
+		},
+	})
+	if decision.NextStage != "resolver" {
+		t.Fatalf("NextStage = %q, want resolver", decision.NextStage)
+	}
+	if decision.DeterministicMode != "none" {
+		t.Fatalf("DeterministicMode = %q, want none", decision.DeterministicMode)
 	}
 }
 
@@ -311,6 +330,44 @@ func TestResolveTrackSeedPrefersRiskierQualifierForCompositeFollowup(t *testing.
 		t.Fatal("expected track seed")
 	}
 	if seed.Title != "Wrecked" {
+		t.Fatalf("seed = %#v", seed)
+	}
+}
+
+func TestResolveTrackSeedUsesFocusedSongPathItemForCompositeFollowup(t *testing.T) {
+	setLastSongPath("track-song-path-seed",
+		songPathTrack{ID: "start", Title: "Windowlicker", ArtistName: "Aphex Twin"},
+		songPathTrack{ID: "end", Title: "Teardrop", ArtistName: "Massive Attack"},
+		[]songPathTrack{
+			{ID: "start", Title: "Windowlicker", ArtistName: "Aphex Twin"},
+			{ID: "mid", Title: "Angel", ArtistName: "Massive Attack"},
+			{ID: "end", Title: "Teardrop", ArtistName: "Massive Attack"},
+		},
+		3,
+		true,
+	)
+	setLastFocusedResultItem("track-song-path-seed", "song_path", normalizedSongPathTrackKey(songPathTrack{
+		ID:         "mid",
+		Title:      "Angel",
+		ArtistName: "Massive Attack",
+	}))
+	seed, ok := resolveTrackSeed(context.WithValue(context.Background(), chatSessionKey, "track-song-path-seed"), &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:             "track_discovery",
+			SubIntent:          "track_similarity",
+			FollowupMode:       "refine_previous",
+			ReferenceTarget:    "previous_results",
+			ReferenceQualifier: "last_item",
+			ResultSetKind:      "song_path",
+		},
+		ResolvedReferenceKind: "song_path",
+		ResolvedItemKey:       normalizedSongPathTrackKey(songPathTrack{ID: "mid", Title: "Angel", ArtistName: "Massive Attack"}),
+		HasSongPath:           true,
+	})
+	if !ok {
+		t.Fatal("expected track seed from song path")
+	}
+	if seed.ID != "mid" || seed.Title != "Angel" {
 		t.Fatalf("seed = %#v", seed)
 	}
 }
@@ -475,13 +532,13 @@ func TestSanitizeNormalizedTurnKeepsCompareSelection(t *testing.T) {
 
 func TestSanitizeNormalizedTurnPromotesCompareSubIntent(t *testing.T) {
 	turn := sanitizeNormalizedTurn("Compare the safer one to the first.", normalizedTurn{
-		Intent:               "other",
-		SubIntent:            "compare",
-		FollowupMode:         "refine_previous",
-		ReferenceTarget:      "previous_results",
-		ReferenceQualifier:   "safer",
-		CompareSelectionMode: "ordinal",
-		CompareSelectionValue:"1",
+		Intent:                "other",
+		SubIntent:             "compare",
+		FollowupMode:          "refine_previous",
+		ReferenceTarget:       "previous_results",
+		ReferenceQualifier:    "safer",
+		CompareSelectionMode:  "ordinal",
+		CompareSelectionValue: "1",
 	})
 	if turn.ResultAction != "compare" {
 		t.Fatalf("result action = %q", turn.ResultAction)
@@ -492,7 +549,7 @@ func TestSanitizeNormalizedTurnPromotesCompareSubIntent(t *testing.T) {
 }
 
 func TestResolveTrackComparisonPair(t *testing.T) {
-	primary, secondary, ok := resolveTrackComparisonPair(normalizedTurn{
+	primary, secondary, sameItem, ok := resolveTrackComparisonPair(resolvedResultReference{}, normalizedTurn{
 		ReferenceQualifier:    "safer",
 		CompareSelectionMode:  "ordinal",
 		CompareSelectionValue: "1",
@@ -504,6 +561,9 @@ func TestResolveTrackComparisonPair(t *testing.T) {
 	if !ok {
 		t.Fatal("expected comparison pair")
 	}
+	if sameItem {
+		t.Fatal("did not expect same-item comparison")
+	}
 	if primary.Title != "Wrecked" {
 		t.Fatalf("primary = %#v", primary)
 	}
@@ -513,7 +573,7 @@ func TestResolveTrackComparisonPair(t *testing.T) {
 }
 
 func TestResolveArtistComparisonPair(t *testing.T) {
-	primary, secondary, ok := resolveArtistComparisonPair(normalizedTurn{
+	primary, secondary, sameItem, ok := resolveArtistComparisonPair(resolvedResultReference{}, normalizedTurn{
 		ReferenceQualifier:    "riskier",
 		CompareSelectionMode:  "ordinal",
 		CompareSelectionValue: "1",
@@ -525,7 +585,118 @@ func TestResolveArtistComparisonPair(t *testing.T) {
 	if !ok {
 		t.Fatal("expected comparison pair")
 	}
+	if sameItem {
+		t.Fatal("did not expect same-item comparison")
+	}
 	if primary.Name != "MØ" {
+		t.Fatalf("primary = %#v", primary)
+	}
+	if secondary.Name != "Queen" {
+		t.Fatalf("secondary = %#v", secondary)
+	}
+}
+
+func TestResolveTrackComparisonPairPrefersExplicitPrimarySelection(t *testing.T) {
+	primary, secondary, sameItem, ok := resolveTrackComparisonPair(resolvedResultReference{
+		resultReference: resultReference{
+			Selection: resultSelection{Mode: "ordinal", Value: "2"},
+		},
+	}, normalizedTurn{
+		CompareSelectionMode:  "ordinal",
+		CompareSelectionValue: "1",
+	}, []trackCandidate{
+		{ID: "trk-1", Title: "Sheep", ArtistName: "Pink Floyd", PlayCount: 1, Score: 0.91},
+		{ID: "trk-2", Title: "Wrecked", ArtistName: "Imagine Dragons", PlayCount: 7, Score: 0.84},
+		{ID: "trk-3", Title: "Thief", ArtistName: "Imagine Dragons", PlayCount: 0, Score: 0.72},
+	})
+	if !ok {
+		t.Fatal("expected comparison pair")
+	}
+	if sameItem {
+		t.Fatal("did not expect same-item comparison")
+	}
+	if primary.Title != "Wrecked" {
+		t.Fatalf("primary = %#v", primary)
+	}
+	if secondary.Title != "Sheep" {
+		t.Fatalf("secondary = %#v", secondary)
+	}
+}
+
+func TestResolveTrackComparisonPairPrefersFocusedPrimaryItem(t *testing.T) {
+	primary, secondary, sameItem, ok := resolveTrackComparisonPair(resolvedResultReference{
+		ResolvedItemKey: normalizedTrackCandidateKey(trackCandidate{
+			ID:         "trk-3",
+			Title:      "Thief",
+			ArtistName: "Imagine Dragons",
+		}),
+	}, normalizedTurn{
+		CompareSelectionMode:  "ordinal",
+		CompareSelectionValue: "1",
+	}, []trackCandidate{
+		{ID: "trk-1", Title: "Sheep", ArtistName: "Pink Floyd", PlayCount: 1, Score: 0.91},
+		{ID: "trk-2", Title: "Wrecked", ArtistName: "Imagine Dragons", PlayCount: 7, Score: 0.84},
+		{ID: "trk-3", Title: "Thief", ArtistName: "Imagine Dragons", PlayCount: 0, Score: 0.72},
+	})
+	if !ok {
+		t.Fatal("expected comparison pair")
+	}
+	if sameItem {
+		t.Fatal("did not expect same-item comparison")
+	}
+	if primary.Title != "Thief" {
+		t.Fatalf("primary = %#v", primary)
+	}
+	if secondary.Title != "Sheep" {
+		t.Fatalf("secondary = %#v", secondary)
+	}
+}
+
+func TestResolveArtistComparisonPairPrefersExplicitPrimarySelection(t *testing.T) {
+	primary, secondary, sameItem, ok := resolveArtistComparisonPair(resolvedResultReference{
+		resultReference: resultReference{
+			Selection: resultSelection{Mode: "ordinal", Value: "3"},
+		},
+	}, normalizedTurn{
+		CompareSelectionMode:  "ordinal",
+		CompareSelectionValue: "1",
+	}, []artistCandidate{
+		{Name: "Queen", PlayCount: 6, Rating: 4},
+		{Name: "MØ", PlayCount: 0, Rating: 0},
+		{Name: "Björk", PlayCount: 3, Rating: 5},
+	})
+	if !ok {
+		t.Fatal("expected comparison pair")
+	}
+	if sameItem {
+		t.Fatal("did not expect same-item comparison")
+	}
+	if primary.Name != "Björk" {
+		t.Fatalf("primary = %#v", primary)
+	}
+	if secondary.Name != "Queen" {
+		t.Fatalf("secondary = %#v", secondary)
+	}
+}
+
+func TestResolveArtistComparisonPairPrefersFocusedPrimaryItem(t *testing.T) {
+	primary, secondary, sameItem, ok := resolveArtistComparisonPair(resolvedResultReference{
+		ResolvedItemKey: normalizedArtistCandidateKey(artistCandidate{Name: "Björk"}),
+	}, normalizedTurn{
+		CompareSelectionMode:  "ordinal",
+		CompareSelectionValue: "1",
+	}, []artistCandidate{
+		{Name: "Queen", PlayCount: 6, Rating: 4},
+		{Name: "MØ", PlayCount: 0, Rating: 0},
+		{Name: "Björk", PlayCount: 3, Rating: 5},
+	})
+	if !ok {
+		t.Fatal("expected comparison pair")
+	}
+	if sameItem {
+		t.Fatal("did not expect same-item comparison")
+	}
+	if primary.Name != "Björk" {
 		t.Fatalf("primary = %#v", primary)
 	}
 	if secondary.Name != "Queen" {
@@ -536,12 +707,12 @@ func TestResolveArtistComparisonPair(t *testing.T) {
 func TestResolveTurnContextSceneCandidatesUseSceneDiscoveryIntent(t *testing.T) {
 	setLastSceneSelection("scene-intent", nil, []sceneSessionItem{{Name: "Indie / Rock", SongCount: 31}})
 	resolved := resolveTurnContext("scene-intent", normalizedTurn{
-		Intent:         "scene_discovery",
-		FollowupMode:   "refine_previous",
-		ReferenceTarget:"previous_results",
-		ResultAction:   "select_candidate",
-		SelectionMode:  "count_match",
-		SelectionValue: "31",
+		Intent:          "scene_discovery",
+		FollowupMode:    "refine_previous",
+		ReferenceTarget: "previous_results",
+		ResultAction:    "select_candidate",
+		SelectionMode:   "count_match",
+		SelectionValue:  "31",
 	})
 	if resolved.Turn.ResultSetKind != "scene_candidates" {
 		t.Fatalf("result set kind = %q", resolved.Turn.ResultSetKind)
@@ -1134,6 +1305,52 @@ func TestHandleAlbumResultSetListeningFollowUpFiltersByWindow(t *testing.T) {
 	}
 	if containsIgnoreCase(resp, "That's All") {
 		t.Fatalf("response = %q, did not expect stale album in this-year response", resp)
+	}
+}
+
+func TestTryTurnIntentRouteHandlesAlbumDiscoveryRecencyFollowUp(t *testing.T) {
+	lastCreativeAlbumSet.mu.Lock()
+	lastCreativeAlbumSet.sessions = make(map[string]creativeAlbumSetState)
+	lastCreativeAlbumSet.mu.Unlock()
+
+	setLastCreativeAlbumSet("session-album-discovery-recency", "semantic", "moody commute", []creativeAlbumCandidate{
+		{
+			Name:       "Sheer Heart Attack",
+			ArtistName: "Queen",
+			LastPlayed: time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339),
+		},
+		{
+			Name:       "That's All",
+			ArtistName: "Mel Tormé",
+			LastPlayed: time.Now().UTC().AddDate(-2, 0, 0).Format(time.RFC3339),
+		},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, "session-album-discovery-recency")
+	resp, ok := srv.tryTurnIntentRoute(ctx, &Turn{
+		SessionID:   "session-album-discovery-recency",
+		UserMessage: "Which of those have I played recently?",
+		Normalized: TurnNormalized{
+			Intent:          "album_discovery",
+			SubIntent:       "result_set_play_recency",
+			FollowupMode:    "query_previous_set",
+			QueryScope:      "library",
+			TimeWindow:      "this_year",
+			ReferenceTarget: "previous_results",
+		},
+		Reference: TurnReference{
+			HasCreativeAlbumSet: true,
+		},
+	}, nil)
+	if !ok {
+		t.Fatal("expected album_discovery follow-up to resolve")
+	}
+	if !containsIgnoreCase(resp.Response, "Sheer Heart Attack") {
+		t.Fatalf("response = %q, want matching album from this year", resp.Response)
+	}
+	if containsIgnoreCase(resp.Response, "That's All") {
+		t.Fatalf("response = %q, did not expect stale album in this-year response", resp.Response)
 	}
 }
 
@@ -1761,6 +1978,51 @@ func TestSanitizeResolverDecisionFallsBackToSupportedCapability(t *testing.T) {
 	}
 }
 
+func TestSanitizeResolverDecisionPreservesCompareAction(t *testing.T) {
+	request := resultSetResolverRequest{
+		Turn: serverTurnRequest{
+			Intent: "track_discovery",
+			Reference: serverTurnReference{
+				RequestedSet: "track_candidates",
+				ResolvedSet:  "track_candidates",
+				Qualifier:    "safer",
+			},
+			Workflow: serverTurnWorkflow{
+				Action:                "compare",
+				SelectionMode:         "all",
+				CompareSelectionMode:  "ordinal",
+				CompareSelectionValue: "1",
+			},
+			Confidence: "high",
+		},
+		Capabilities: currentResultSetCapabilities(),
+	}
+	fallback := resultSetResolverDecision{
+		SetKind:               "track_candidates",
+		Operation:             "compare",
+		SelectionMode:         "all",
+		CompareSelectionMode:  "ordinal",
+		CompareSelectionValue: "1",
+		Confidence:            "high",
+		Reason:                "structured_passthrough",
+	}
+
+	got := sanitizeResolverDecision(resultSetResolverDecision{
+		SetKind:        "track_candidates",
+		Operation:      "describe_item",
+		SelectionMode:  "ordinal",
+		SelectionValue: "1",
+		Confidence:     "high",
+	}, request, fallback)
+
+	if got.Operation != "compare" {
+		t.Fatalf("Operation = %q, want compare", got.Operation)
+	}
+	if got.CompareSelectionMode != "ordinal" || got.CompareSelectionValue != "1" {
+		t.Fatalf("compare selection = (%q, %q)", got.CompareSelectionMode, got.CompareSelectionValue)
+	}
+}
+
 func TestSanitizeResolverDecisionPrefersItemKeySelectorWhenSupported(t *testing.T) {
 	request := resultSetResolverRequest{
 		Turn: serverTurnRequest{
@@ -1801,6 +2063,191 @@ func TestSanitizeResolverDecisionPrefersItemKeySelectorWhenSupported(t *testing.
 	}
 	if got.SelectionValue != "" {
 		t.Fatalf("SelectionValue = %q, want empty", got.SelectionValue)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesTrackCandidateCompare(t *testing.T) {
+	sessionID := "route-track-compare"
+	setLastTrackCandidateSet(sessionID, "similar_tracks", "Windowlicker", []trackCandidate{
+		{ID: "1", Title: "Matador", ArtistName: "Arctic Monkeys", PlayCount: 1, Score: 0.92},
+		{ID: "2", Title: "Doll", ArtistName: "Foo Fighters", PlayCount: 8, Score: 0.83},
+		{ID: "3", Title: "Gold", ArtistName: "Imagine Dragons", PlayCount: 3, Score: 0.82},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:                "track_discovery",
+			SubIntent:             "compare",
+			FollowupMode:          "refine_previous",
+			ReferenceTarget:       "previous_results",
+			ReferenceQualifier:    "safer",
+			ResultSetKind:         "track_candidates",
+			ResultAction:          "compare",
+			CompareSelectionMode:  "ordinal",
+			CompareSelectionValue: "1",
+		},
+		ResolvedReferenceKind: "track_candidates",
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Compare the safer one to the first.", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "Selected anchor: Doll by Foo Fighters") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "comparison target: Matador by Arctic Monkeys") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesTrackCandidateCompareWithExplicitPrimarySelection(t *testing.T) {
+	sessionID := "route-track-compare-primary-selection"
+	setLastTrackCandidateSet(sessionID, "similar_tracks", "Windowlicker", []trackCandidate{
+		{ID: "1", Title: "Matador", ArtistName: "Arctic Monkeys", PlayCount: 1, Score: 0.92},
+		{ID: "2", Title: "Doll", ArtistName: "Foo Fighters", PlayCount: 8, Score: 0.83},
+		{ID: "3", Title: "Gold", ArtistName: "Imagine Dragons", PlayCount: 3, Score: 0.82},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:                "track_discovery",
+			SubIntent:             "compare",
+			FollowupMode:          "refine_previous",
+			ReferenceTarget:       "previous_results",
+			ResultSetKind:         "track_candidates",
+			ResultAction:          "compare",
+			SelectionMode:         "ordinal",
+			SelectionValue:        "2",
+			CompareSelectionMode:  "ordinal",
+			CompareSelectionValue: "1",
+		},
+		ResolvedReferenceKind: "track_candidates",
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Compare the second one to the first.", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "Selected anchor: Doll by Foo Fighters") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "comparison target: Matador by Arctic Monkeys") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesTrackCandidateCompareWhenPrimaryMatchesComparisonTarget(t *testing.T) {
+	sessionID := "route-track-compare-same"
+	setLastTrackCandidateSet(sessionID, "similar_tracks", "Windowlicker", []trackCandidate{
+		{ID: "1", Title: "Balaclava", ArtistName: "Arctic Monkeys", PlayCount: 0, Score: 0.91},
+		{ID: "2", Title: "Doll", ArtistName: "Foo Fighters", PlayCount: 0, Score: 0.83},
+		{ID: "3", Title: "Gold", ArtistName: "Imagine Dragons", PlayCount: 0, Score: 0.82},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:                "track_discovery",
+			FollowupMode:          "refine_previous",
+			ReferenceTarget:       "previous_results",
+			ReferenceQualifier:    "safer",
+			ResultSetKind:         "track_candidates",
+			ResultAction:          "compare",
+			SelectionMode:         "all",
+			CompareSelectionMode:  "ordinal",
+			CompareSelectionValue: "1",
+		},
+		ResolvedReferenceKind: "track_candidates",
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Compare the safer one to the first.", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "already the first result") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesArtistCandidateCompare(t *testing.T) {
+	sessionID := "route-artist-compare"
+	setLastArtistCandidateSet(sessionID, "Radiohead", []artistCandidate{
+		{ID: "1", Name: "Blur", PlayCount: 2, Rating: 6, Score: 0.91},
+		{ID: "2", Name: "Coldplay", PlayCount: 9, Rating: 8, Score: 0.87},
+		{ID: "3", Name: "Elbow", PlayCount: 4, Rating: 7, Score: 0.84},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:                "artist_discovery",
+			SubIntent:             "compare",
+			FollowupMode:          "refine_previous",
+			ReferenceTarget:       "previous_results",
+			ReferenceQualifier:    "safer",
+			ResultSetKind:         "artist_candidates",
+			ResultAction:          "compare",
+			CompareSelectionMode:  "ordinal",
+			CompareSelectionValue: "1",
+		},
+		ResolvedReferenceKind: "artist_candidates",
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Compare the safer one to the first.", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "Selected anchor: Coldplay") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "comparison target: Blur") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesArtistCandidateCompareWithFocusedPrimaryItem(t *testing.T) {
+	sessionID := "route-artist-compare-focused"
+	setLastArtistCandidateSet(sessionID, "Radiohead", []artistCandidate{
+		{ID: "1", Name: "Blur", PlayCount: 2, Rating: 6, Score: 0.91},
+		{ID: "2", Name: "Coldplay", PlayCount: 9, Rating: 8, Score: 0.87},
+		{ID: "3", Name: "Elbow", PlayCount: 4, Rating: 7, Score: 0.84},
+	})
+	setLastFocusedResultItem(sessionID, "artist_candidates", normalizedArtistCandidateKey(artistCandidate{ID: "3", Name: "Elbow"}))
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:                "artist_discovery",
+			SubIntent:             "compare",
+			FollowupMode:          "refine_previous",
+			ReferenceTarget:       "previous_results",
+			ReferenceQualifier:    "last_item",
+			ResultSetKind:         "artist_candidates",
+			ResultAction:          "compare",
+			CompareSelectionMode:  "ordinal",
+			CompareSelectionValue: "1",
+		},
+		ResolvedReferenceKind: "artist_candidates",
+		ResolvedItemKey:       normalizedArtistCandidateKey(artistCandidate{ID: "3", Name: "Elbow"}),
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Compare that one to the first.", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "Selected anchor: Elbow") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "comparison target: Blur") {
+		t.Fatalf("response = %q", resp.Response)
 	}
 }
 
@@ -1892,6 +2339,41 @@ func TestSanitizeNormalizedTurnNormalizesPreviousPlaylistReference(t *testing.T)
 				t.Fatalf("ReferenceTarget = %q, want previous_playlist", turn.ReferenceTarget)
 			}
 		})
+	}
+}
+
+func TestSanitizeNormalizedTurnDefaultsRecentResultSetWindow(t *testing.T) {
+	turn := sanitizeNormalizedTurn("Which of those have I played recently?", normalizedTurn{
+		Intent:          "album_discovery",
+		SubIntent:       "result_set_play_recency",
+		FollowupMode:    "query_previous_set",
+		ReferenceTarget: "previous_results",
+	})
+	if turn.TimeWindow != "last_month" {
+		t.Fatalf("TimeWindow = %q, want last_month", turn.TimeWindow)
+	}
+}
+
+func TestShouldAttemptPlaylistCreateTurn(t *testing.T) {
+	if !shouldAttemptPlaylistCreateTurn(&Turn{
+		UserMessage: "Create a melancholy jazz playlist for late nights.",
+		Normalized: TurnNormalized{
+			Intent:    "playlist",
+			SubIntent: "playlist_vibe",
+		},
+	}) {
+		t.Fatal("expected playlist create route to be attempted")
+	}
+	if shouldAttemptPlaylistCreateTurn(&Turn{
+		UserMessage: "What's the vibe of that playlist?",
+		Normalized: TurnNormalized{
+			Intent:          "playlist",
+			SubIntent:       "playlist_vibe",
+			FollowupMode:    "query_previous_set",
+			ReferenceTarget: "previous_playlist",
+		},
+	}) {
+		t.Fatal("did not expect saved playlist vibe follow-up to route as create")
 	}
 }
 

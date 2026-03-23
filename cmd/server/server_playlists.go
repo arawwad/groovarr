@@ -23,12 +23,13 @@ func playlistExecutionHandlers() []serverExecutionHandler {
 	return []serverExecutionHandler{
 		{
 			name: "playlist_candidate_availability",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "playlist_candidates" &&
 					strings.TrimSpace(request.Operation) == "inspect_availability"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveStructuredPlaylistAvailabilityOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredPlaylistAvailabilityOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}
@@ -67,6 +68,10 @@ func (s *Server) handleStructuredPlaylistTracksQuery(ctx context.Context, resolv
 	return s.renderSavedPlaylistTracks(ctx, playlistName)
 }
 
+func (s *Server) handleStructuredPlaylistTracksQueryTurn(ctx context.Context, turn *Turn, history []agent.Message) (string, bool) {
+	return s.handleStructuredPlaylistTracksQuery(ctx, turnToResolvedTurnContext(turn), history)
+}
+
 func (s *Server) handleStructuredPlaylistInventory(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.SubIntent) != "playlist_inventory" {
 		return "", false
@@ -103,12 +108,20 @@ func (s *Server) handleStructuredPlaylistInventory(ctx context.Context, resolved
 	return renderRouteBulletList("Your playlists", items, 12), true
 }
 
+func (s *Server) handleStructuredPlaylistInventoryTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredPlaylistInventory(ctx, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredSavedPlaylistAppend(ctx context.Context, resolved *resolvedTurnContext, history []agent.Message) (ChatResponse, bool) {
 	outcome, ok := s.resolveStructuredSavedPlaylistAppendOutcome(ctx, resolved, history)
 	if !ok {
 		return ChatResponse{}, false
 	}
 	return renderStructuredPlaylistWorkflowOutcome(outcome)
+}
+
+func (s *Server) handleStructuredSavedPlaylistAppendTurn(ctx context.Context, turn *Turn, history []agent.Message) (ChatResponse, bool) {
+	return s.handleStructuredSavedPlaylistAppend(ctx, turnToResolvedTurnContext(turn), history)
 }
 
 func (s *Server) resolveStructuredSavedPlaylistAppendOutcome(ctx context.Context, resolved *resolvedTurnContext, history []agent.Message) (playlistWorkflowOutcome, bool) {
@@ -141,6 +154,10 @@ func (s *Server) handleStructuredSavedPlaylistRefresh(ctx context.Context, resol
 	return renderStructuredPlaylistWorkflowOutcome(outcome)
 }
 
+func (s *Server) handleStructuredSavedPlaylistRefreshTurn(ctx context.Context, turn *Turn, history []agent.Message) (ChatResponse, bool) {
+	return s.handleStructuredSavedPlaylistRefresh(ctx, turnToResolvedTurnContext(turn), history)
+}
+
 func (s *Server) resolveStructuredSavedPlaylistRefreshOutcome(ctx context.Context, resolved *resolvedTurnContext, history []agent.Message) (playlistWorkflowOutcome, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.SubIntent) != "playlist_refresh" {
 		return playlistWorkflowOutcome{}, false
@@ -163,6 +180,10 @@ func (s *Server) handleStructuredSavedPlaylistRepair(ctx context.Context, resolv
 		return ChatResponse{}, false
 	}
 	return renderStructuredPlaylistWorkflowOutcome(outcome)
+}
+
+func (s *Server) handleStructuredSavedPlaylistRepairTurn(ctx context.Context, turn *Turn, history []agent.Message) (ChatResponse, bool) {
+	return s.handleStructuredSavedPlaylistRepair(ctx, turnToResolvedTurnContext(turn), history)
 }
 
 func (s *Server) resolveStructuredSavedPlaylistRepairOutcome(ctx context.Context, resolved *resolvedTurnContext, history []agent.Message) (playlistWorkflowOutcome, bool) {
@@ -191,6 +212,10 @@ func (s *Server) handleStructuredSavedPlaylistVibe(ctx context.Context, resolved
 	return s.renderSavedPlaylistVibe(ctx, playlistName)
 }
 
+func (s *Server) handleStructuredSavedPlaylistVibeTurn(ctx context.Context, turn *Turn, history []agent.Message) (string, bool) {
+	return s.handleStructuredSavedPlaylistVibe(ctx, turnToResolvedTurnContext(turn), history)
+}
+
 func (s *Server) handleStructuredSavedPlaylistArtistCoverage(ctx context.Context, resolved *resolvedTurnContext, history []agent.Message) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.SubIntent) != "playlist_artist_coverage" {
 		return "", false
@@ -210,12 +235,20 @@ func (s *Server) handleStructuredSavedPlaylistArtistCoverage(ctx context.Context
 	return s.renderSavedPlaylistArtistCoverage(ctx, playlistName, artistName)
 }
 
+func (s *Server) handleStructuredSavedPlaylistArtistCoverageTurn(ctx context.Context, turn *Turn, history []agent.Message) (string, bool) {
+	return s.handleStructuredSavedPlaylistArtistCoverage(ctx, turnToResolvedTurnContext(turn), history)
+}
+
 func (s *Server) handleStructuredPlaylistAvailability(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	outcome, ok := s.resolveStructuredPlaylistAvailabilityOutcome(ctx, resolved)
 	if !ok {
 		return "", false
 	}
 	return renderStructuredPlaylistAvailability(outcome)
+}
+
+func (s *Server) handleStructuredPlaylistAvailabilityTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredPlaylistAvailability(ctx, turnToResolvedTurnContext(turn))
 }
 
 func (s *Server) resolveStructuredPlaylistAvailabilityOutcome(ctx context.Context, resolved *resolvedTurnContext) (playlistAvailabilityOutcome, bool) {
@@ -229,8 +262,8 @@ func (s *Server) resolveStructuredPlaylistAvailabilityOutcome(ctx context.Contex
 		return playlistAvailabilityOutcome{}, false
 	}
 
-	_, playlistName, plannedAt, planned := getLastPlannedPlaylist(chatSessionIDFromContext(ctx))
-	if len(planned) == 0 || plannedAt.IsZero() || time.Since(plannedAt) > 30*time.Minute {
+	_, playlistName, plannedAt, planned, _, _, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).PlaylistContext()
+	if !ok || len(planned) == 0 || plannedAt.IsZero() || time.Since(plannedAt) > 30*time.Minute {
 		return playlistAvailabilityOutcome{}, false
 	}
 
@@ -303,6 +336,10 @@ func (s *Server) handleStructuredPlaylistQueueRequest(ctx context.Context, resol
 		return ChatResponse{}, false
 	}
 	return renderStructuredPlaylistWorkflowOutcome(outcome)
+}
+
+func (s *Server) handleStructuredPlaylistQueueRequestTurn(ctx context.Context, turn *Turn, history []agent.Message) (ChatResponse, bool) {
+	return s.handleStructuredPlaylistQueueRequest(ctx, turnToResolvedTurnContext(turn), history)
 }
 
 func (s *Server) resolveStructuredPlaylistQueueRequestOutcome(ctx context.Context, resolved *resolvedTurnContext, history []agent.Message) (playlistWorkflowOutcome, bool) {

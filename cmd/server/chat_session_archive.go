@@ -53,6 +53,8 @@ type archivedRequestView struct {
 	RouteStages    []string            `json:"routeStages,omitempty"`
 	Tools          []archivedToolView  `json:"tools,omitempty"`
 	Events         []archivedChatEvent `json:"events,omitempty"`
+	TurnSummary    string              `json:"turnSummary,omitempty"`
+	FinalTurn      string              `json:"finalTurn,omitempty"`
 	LatestResponse string              `json:"latestResponse,omitempty"`
 }
 
@@ -175,6 +177,25 @@ func (a *chatSessionArchive) RecordResponse(ctx context.Context, response ChatRe
 	}
 	if err != nil {
 		event.Error = compactText(err.Error(), 400)
+	}
+	a.appendEvent(event)
+}
+
+func (a *chatSessionArchive) RecordTurn(ctx context.Context, turn *Turn) {
+	if a == nil || turn == nil {
+		return
+	}
+	event := archivedChatEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		SessionID: chatSessionIDFromContext(ctx),
+		RequestID: chatRequestIDFromContext(ctx),
+		Kind:      "turn",
+		Result:    compactText(turn.toJSON(), 16000),
+	}
+	if summary := compactText(renderTurnSummary(turn), 500); summary != "" {
+		event.Fields = map[string]string{
+			"summary": summary,
+		}
 	}
 	a.appendEvent(event)
 }
@@ -354,6 +375,8 @@ func buildArchivedSessionViews(events []archivedChatEvent, includeEvents bool, l
 		stageSeen      map[string]struct{}
 		tools          []archivedToolView
 		events         []archivedChatEvent
+		turnSummary    string
+		finalTurn      string
 		latestResponse string
 	}
 	type sessionAgg struct {
@@ -425,6 +448,13 @@ func buildArchivedSessionViews(events []archivedChatEvent, includeEvents bool, l
 				Result:    event.Result,
 				Error:     event.Error,
 			})
+		case "turn":
+			if summary := strings.TrimSpace(event.Fields["summary"]); summary != "" {
+				reqAgg.turnSummary = summary
+			}
+			if payload := strings.TrimSpace(event.Result); payload != "" {
+				reqAgg.finalTurn = payload
+			}
 		case "response":
 			if strings.TrimSpace(event.Result) != "" {
 				reqAgg.latestResponse = event.Result
@@ -459,6 +489,8 @@ func buildArchivedSessionViews(events []archivedChatEvent, includeEvents bool, l
 				RouteStages:    reqAgg.routeStages,
 				Tools:          reqAgg.tools,
 				Events:         reqAgg.events,
+				TurnSummary:    reqAgg.turnSummary,
+				FinalTurn:      reqAgg.finalTurn,
 				LatestResponse: reqAgg.latestResponse,
 			})
 		}

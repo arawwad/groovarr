@@ -73,17 +73,18 @@ func (s *Server) syncChatSessionMemory(memory *chatSessionMemory, sessionID stri
 	if memory == nil {
 		return
 	}
-	if _, playlistName, _, candidates := getLastPlannedPlaylist(sessionID); len(candidates) > 0 {
+	turnMemory := loadTurnSessionMemory(sessionID)
+	if _, playlistName, _, candidates, _, _, ok := turnMemory.PlaylistContext(); ok && len(candidates) > 0 {
 		if playlist := strings.TrimSpace(playlistName); playlist != "" {
 			memory.CurrentPlaylist = playlist
 		}
 	}
-	if prompt, _, _, candidates := getLastPlannedPlaylist(sessionID); len(candidates) > 0 {
+	if prompt, _, _, candidates, _, _, ok := turnMemory.PlaylistContext(); ok && len(candidates) > 0 {
 		if text := strings.TrimSpace(prompt); text != "" {
 			memory.LastPlaylistPrompt = text
 		}
 	}
-	if _, _, query := getLastDiscoveredAlbums(sessionID); strings.TrimSpace(query) != "" {
+	if _, _, query, ok := turnMemory.DiscoveredAlbums(); ok && strings.TrimSpace(query) != "" {
 		memory.LastDiscoveryQuery = strings.TrimSpace(query)
 	}
 }

@@ -10,101 +10,112 @@ import (
 	"groovarr/internal/agent"
 )
 
-func (s *Server) tryNormalizedIntentRoute(ctx context.Context, msg string, history []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
+func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []agent.Message) (ChatResponse, bool) {
+	if turn == nil {
+		return ChatResponse{}, false
+	}
+	resolved := turnToResolvedTurnContext(turn)
 	if resolved == nil {
 		return ChatResponse{}, false
 	}
+	msg := turn.UserMessage
 	lowerMsg := strings.ToLower(strings.TrimSpace(msg))
-	turn := resolved.Turn
+	normalized := resolved.Turn
 
 	if resolved.HasResolvedScene {
-		if resp, ok := s.handleStructuredSceneSelection(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredSceneSelectionTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
 	}
-	if resp, ok := s.handleStructuredSceneOverview(ctx, resolved); ok {
+	if resp, ok := s.handleStructuredSceneOverviewTurn(ctx, turn); ok {
 		return ChatResponse{Response: resp}, true
 	}
 
-	switch turn.Intent {
+	switch normalized.Intent {
 	case "general_chat", "other":
-		if resp, pendingAction, ok := s.handleStructuredArtistRemoval(ctx, resolved); ok {
+		if resp, pendingAction, ok := s.handleStructuredArtistRemovalTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp, PendingAction: pendingAction}, true
 		}
-		if resp, pendingAction, ok := s.handleStructuredLidarrCleanupApply(ctx, resolved); ok {
+		if resp, pendingAction, ok := s.handleStructuredLidarrCleanupApplyTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp, PendingAction: pendingAction}, true
 		}
-		if resp, pendingAction, ok := s.handleStructuredBadlyRatedCleanup(ctx, resolved); ok {
+		if resp, pendingAction, ok := s.handleStructuredBadlyRatedCleanupTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp, PendingAction: pendingAction}, true
 		}
 		return ChatResponse{}, false
 	case "track_discovery":
-		if resp, ok := s.handleStructuredSongPathSummary(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredSongPathSummaryTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredTrackVariantPick(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredTrackCompareTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredTrackDescription(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredTrackVariantPickTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredTrackSimilarity(ctx, msg, resolved); ok {
+		if resp, ok := s.handleStructuredTrackDescriptionTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredTrackSearch(ctx, msg, resolved); ok {
+		if resp, ok := s.handleStructuredTrackSimilarityTurn(ctx, turn); ok {
+			return ChatResponse{Response: resp}, true
+		}
+		if resp, ok := s.handleStructuredTrackSearchTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
 	case "artist_discovery":
-		if resp, ok := s.handleStructuredArtistVariantPick(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredArtistCompareTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredArtistStartingAlbum(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredArtistVariantPickTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredArtistSimilarity(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredArtistStartingAlbumTurn(ctx, turn); ok {
+			return ChatResponse{Response: resp}, true
+		}
+		if resp, ok := s.handleStructuredArtistSimilarityTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
 	case "scene_discovery":
-		if resp, ok := s.handleStructuredSceneSelection(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredSceneSelectionTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredSceneOverview(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredSceneOverviewTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
 	case "listening":
-		if strings.TrimSpace(turn.SubIntent) == "listening_interpretation" || strings.TrimSpace(turn.SubIntent) == "artist_dominance" {
-			if resp, ok := s.tryNormalizedRecentListeningInterpretation(chatCtxOrBackground(ctx), resolved); ok {
+		if strings.TrimSpace(normalized.SubIntent) == "listening_interpretation" || strings.TrimSpace(normalized.SubIntent) == "artist_dominance" {
+			if resp, ok := s.tryRecentListeningInterpretationTurn(chatCtxOrBackground(ctx), turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
 		}
-		if turn.FollowupMode != "none" {
-			if resp, ok := s.handleAlbumResultSetListeningFollowUp(ctx, resolved); ok {
+		if normalized.FollowupMode != "none" {
+			if resp, ok := s.handleAlbumResultSetListeningFollowUpTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
-			if resp, ok := s.tryNormalizedRecentListeningInterpretation(chatCtxOrBackground(ctx), resolved); ok {
+			if resp, ok := s.tryRecentListeningInterpretationTurn(chatCtxOrBackground(ctx), turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
-			if resp, ok := s.handleStructuredCreativeAlbumSetFollowUp(ctx, resolved); ok {
+			if resp, ok := s.handleStructuredCreativeAlbumSetFollowUpTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
 		}
-		if turn.TimeWindow != "none" {
-			if resp, ok := s.tryNormalizedRecentListeningSummary(ctx, turn, lowerMsg); ok {
+		if normalized.TimeWindow != "none" {
+			if resp, ok := s.tryNormalizedRecentListeningSummary(ctx, normalized, lowerMsg); ok {
 				return resp, true
 			}
 		}
 	case "stats":
-		if turn.FollowupMode != "none" || strings.TrimSpace(turn.SubIntent) == "listening_interpretation" || strings.TrimSpace(turn.SubIntent) == "artist_dominance" {
-			if resp, ok := s.tryNormalizedRecentListeningInterpretation(chatCtxOrBackground(ctx), resolved); ok {
+		if normalized.FollowupMode != "none" || strings.TrimSpace(normalized.SubIntent) == "listening_interpretation" || strings.TrimSpace(normalized.SubIntent) == "artist_dominance" {
+			if resp, ok := s.tryRecentListeningInterpretationTurn(chatCtxOrBackground(ctx), turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
 		}
-		if turn.TimeWindow != "none" && (turn.QueryScope == "stats" || turn.QueryScope == "listening" || turn.QueryScope == "unknown" || turn.QueryScope == "general" || strings.TrimSpace(turn.SubIntent) == "artist_dominance") {
-			if resp, ok := s.tryNormalizedArtistListeningStats(ctx, turn); ok {
+		if normalized.TimeWindow != "none" && (normalized.QueryScope == "stats" || normalized.QueryScope == "listening" || normalized.QueryScope == "unknown" || normalized.QueryScope == "general" || strings.TrimSpace(normalized.SubIntent) == "artist_dominance" || strings.TrimSpace(normalized.SubIntent) == "library_top_artists") {
+			if resp, ok := s.tryNormalizedArtistListeningStats(ctx, normalized); ok {
 				return ChatResponse{Response: resp}, true
 			}
 		}
-		if turn.QueryScope == "library" {
+		if normalized.QueryScope == "library" {
 			if resp, ok := s.handleLibraryFacetQuery(ctx, lowerMsg); ok {
 				return ChatResponse{Response: resp}, true
 			}
@@ -114,24 +125,27 @@ func (s *Server) tryNormalizedIntentRoute(ctx context.Context, msg string, histo
 			if resp, ok := s.handleAlbumLibraryStatsQuery(ctx, lowerMsg); ok {
 				return ChatResponse{Response: resp}, true
 			}
-			if resp, ok := s.tryNormalizedTopLibraryArtists(ctx, turn); ok {
+			if resp, ok := s.tryNormalizedTopLibraryArtists(ctx, normalized); ok {
 				return ChatResponse{Response: resp}, true
 			}
 		}
 	case "album_discovery":
-		if turn.FollowupMode != "none" {
-			if resp, ok := s.handleStructuredDiscoveredAlbumsAvailability(ctx, resolved); ok {
+		if normalized.FollowupMode != "none" {
+			if resp, ok := s.handleAlbumResultSetListeningFollowUpTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
-			if resp, pendingAction, ok := s.handleStructuredDiscoveredAlbumsApply(ctx, resolved); ok {
+			if resp, ok := s.handleStructuredDiscoveredAlbumsAvailabilityTurn(ctx, turn); ok {
+				return ChatResponse{Response: resp}, true
+			}
+			if resp, pendingAction, ok := s.handleStructuredDiscoveredAlbumsApplyTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp, PendingAction: pendingAction}, true
 			}
-			if resp, ok := s.handleStructuredCreativeAlbumSetFollowUp(ctx, resolved); ok {
+			if resp, ok := s.handleStructuredCreativeAlbumSetFollowUpTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
 		}
-		if turn.QueryScope == "library" {
-			if resp, ok := s.handleStructuredCreativeLibraryDiscovery(ctx, resolved); ok {
+		if normalized.QueryScope == "library" {
+			if resp, ok := s.handleStructuredCreativeLibraryDiscoveryTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
 			if resp, ok := s.handleUnderplayedAlbums(ctx, msg); ok {
@@ -145,41 +159,56 @@ func (s *Server) tryNormalizedIntentRoute(ctx context.Context, msg string, histo
 			return ChatResponse{Response: resp}, true
 		}
 	case "playlist":
-		if resp, ok := s.handleStructuredPlaylistInventory(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredPlaylistInventoryTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredSavedPlaylistVibe(ctx, resolved, history); ok {
-			return ChatResponse{Response: resp}, true
-		}
-		if resp, ok := s.handleStructuredSavedPlaylistArtistCoverage(ctx, resolved, history); ok {
-			return ChatResponse{Response: resp}, true
-		}
-		if resp, ok := s.handleStructuredSavedPlaylistAppend(ctx, resolved, history); ok {
-			return resp, true
-		}
-		if resp, ok := s.handleStructuredSavedPlaylistRefresh(ctx, resolved, history); ok {
-			return resp, true
-		}
-		if resp, ok := s.handleStructuredSavedPlaylistRepair(ctx, resolved, history); ok {
-			return resp, true
-		}
-		if resp, ok := s.handleStructuredPlaylistQueueRequest(ctx, resolved, history); ok {
-			return resp, true
-		}
-		if turn.FollowupMode == "none" {
-			if resp, ok := s.tryNormalizedPlaylistCreate(ctx, msg, resolved); ok {
+		if shouldAttemptPlaylistCreateTurn(turn) {
+			if resp, ok := s.tryPlaylistCreateTurn(ctx, turn); ok {
 				return resp, true
 			}
 		}
-		if resp, ok := s.handleStructuredPlaylistTracksQuery(ctx, resolved, history); ok {
+		if resp, ok := s.handleStructuredSavedPlaylistVibeTurn(ctx, turn, history); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredPlaylistAvailability(ctx, resolved); ok {
+		if resp, ok := s.handleStructuredSavedPlaylistArtistCoverageTurn(ctx, turn, history); ok {
+			return ChatResponse{Response: resp}, true
+		}
+		if resp, ok := s.handleStructuredSavedPlaylistAppendTurn(ctx, turn, history); ok {
+			return resp, true
+		}
+		if resp, ok := s.handleStructuredSavedPlaylistRefreshTurn(ctx, turn, history); ok {
+			return resp, true
+		}
+		if resp, ok := s.handleStructuredSavedPlaylistRepairTurn(ctx, turn, history); ok {
+			return resp, true
+		}
+		if resp, ok := s.handleStructuredPlaylistQueueRequestTurn(ctx, turn, history); ok {
+			return resp, true
+		}
+		if normalized.FollowupMode == "none" {
+			if resp, ok := s.tryPlaylistCreateTurn(ctx, turn); ok {
+				return resp, true
+			}
+		}
+		if resp, ok := s.handleStructuredPlaylistTracksQueryTurn(ctx, turn, history); ok {
+			return ChatResponse{Response: resp}, true
+		}
+		if resp, ok := s.handleStructuredPlaylistAvailabilityTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
 	}
 
 	return ChatResponse{}, false
+}
+
+func (s *Server) tryNormalizedIntentRoute(ctx context.Context, msg string, history []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
+	turn := turnFromResolved(resolved)
+	if turn == nil {
+		return ChatResponse{}, false
+	}
+	turn.UserMessage = strings.TrimSpace(msg)
+	turn.SessionID = chatSessionIDFromContext(ctx)
+	return s.tryTurnIntentRoute(ctx, turn, history)
 }
 
 func (s *Server) handleAlbumResultSetListeningFollowUp(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
@@ -188,6 +217,10 @@ func (s *Server) handleAlbumResultSetListeningFollowUp(ctx context.Context, reso
 		return "", false
 	}
 	return renderAlbumResultSetListeningFollowUp(outcome)
+}
+
+func (s *Server) handleAlbumResultSetListeningFollowUpTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleAlbumResultSetListeningFollowUp(ctx, turnToResolvedTurnContext(turn))
 }
 
 type albumResultSetListeningOutcome struct {
@@ -243,15 +276,19 @@ func renderAlbumResultSetListeningWindow(candidates []creativeAlbumCandidate, st
 	)
 }
 
-func (s *Server) tryNormalizedRecentListeningInterpretation(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
-	if resolved == nil {
+func (s *Server) tryRecentListeningInterpretationTurn(ctx context.Context, turn *Turn) (string, bool) {
+	if turn == nil {
 		return "", false
 	}
-	state, ok := getLastRecentListeningSummary(chatSessionIDFromContext(ctx))
+	state, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).RecentListeningSummary()
 	if !ok || state.updatedAt.IsZero() || time.Since(state.updatedAt) > llmContextRecentListeningTTL {
 		return "", false
 	}
-	return describeStructuredRecentListeningInterpretation(state, resolved.Turn.SubIntent)
+	return describeStructuredRecentListeningInterpretation(state, turn.Normalized.SubIntent)
+}
+
+func (s *Server) tryNormalizedRecentListeningInterpretation(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
+	return s.tryRecentListeningInterpretationTurn(ctx, turnFromResolved(resolved))
 }
 
 func (s *Server) tryNormalizedRecentListeningSummary(ctx context.Context, turn normalizedTurn, lowerMsg string) (ChatResponse, bool) {
@@ -359,11 +396,23 @@ func chatCtxOrBackground(ctx context.Context) context.Context {
 	return ctx
 }
 
-func (s *Server) tryNormalizedPlaylistCreate(ctx context.Context, rawMsg string, resolved *resolvedTurnContext) (ChatResponse, bool) {
-	if resolved != nil && strings.TrimSpace(resolved.Turn.SubIntent) != "" {
-		return ChatResponse{}, false
+func (s *Server) tryPlaylistCreateTurn(ctx context.Context, turn *Turn) (ChatResponse, bool) {
+	if turn != nil {
+		subIntent := strings.TrimSpace(turn.Normalized.SubIntent)
+		if subIntent != "" && subIntent != "playlist_vibe" {
+			return ChatResponse{}, false
+		}
+	}
+	rawMsg := ""
+	var normalized TurnNormalized
+	if turn != nil {
+		rawMsg = turn.UserMessage
+		normalized = turn.Normalized
 	}
 	prompt := extractNormalizedPlaylistCreateIntent(rawMsg)
+	if prompt == "" {
+		prompt = normalizedPlaylistCreatePrompt(normalized)
+	}
 	if prompt == "" {
 		return ChatResponse{Response: "What kind of playlist do you want me to make?"}, true
 	}
@@ -376,4 +425,52 @@ func (s *Server) tryNormalizedPlaylistCreate(ctx context.Context, rawMsg string,
 		return ChatResponse{}, false
 	}
 	return ChatResponse{Response: response, PendingAction: pendingAction}, true
+}
+
+func (s *Server) tryNormalizedPlaylistCreate(ctx context.Context, rawMsg string, resolved *resolvedTurnContext) (ChatResponse, bool) {
+	turn := turnFromResolved(resolved)
+	if turn == nil {
+		turn = &Turn{}
+	}
+	turn.UserMessage = strings.TrimSpace(rawMsg)
+	return s.tryPlaylistCreateTurn(ctx, turn)
+}
+
+func shouldAttemptPlaylistCreateTurn(turn *Turn) bool {
+	if turn == nil || strings.TrimSpace(turn.UserMessage) == "" {
+		return false
+	}
+	if strings.TrimSpace(turn.Normalized.FollowupMode) != "" && strings.TrimSpace(turn.Normalized.FollowupMode) != "none" {
+		return false
+	}
+	subIntent := strings.TrimSpace(turn.Normalized.SubIntent)
+	if subIntent != "" && subIntent != "playlist_vibe" {
+		return false
+	}
+	if extractNormalizedPlaylistCreateIntent(turn.UserMessage) != "" {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(turn.UserMessage))
+	return strings.Contains(lower, " playlist") &&
+		(strings.Contains(lower, "make ") ||
+			strings.Contains(lower, "create ") ||
+			strings.Contains(lower, "build ") ||
+			strings.Contains(lower, "put together ") ||
+			strings.Contains(lower, "assemble ") ||
+			strings.Contains(lower, "spin up ") ||
+			strings.Contains(lower, "queue up "))
+}
+
+func normalizedPlaylistCreatePrompt(turn TurnNormalized) string {
+	if text := strings.TrimSpace(turn.PromptHint); text != "" {
+		return text
+	}
+	parts := make([]string, 0, len(turn.StyleHints)+1)
+	if len(turn.StyleHints) > 0 {
+		parts = append(parts, strings.Join(turn.StyleHints, " "))
+	}
+	if target := strings.TrimSpace(turn.TargetName); target != "" {
+		parts = append(parts, "for "+target)
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }

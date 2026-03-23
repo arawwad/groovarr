@@ -48,6 +48,10 @@ func (s *Server) handleStructuredCreativeAlbumSetFollowUp(ctx context.Context, r
 	return renderStructuredCreativeAlbumSetFollowUp(outcome)
 }
 
+func (s *Server) handleStructuredCreativeAlbumSetFollowUpTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredCreativeAlbumSetFollowUp(ctx, turnToResolvedTurnContext(turn))
+}
+
 type creativeFollowUpOutcome struct {
 	kind       string
 	single     *creativeAlbumCandidate
@@ -107,14 +111,15 @@ func creativeExecutionHandlers() []serverExecutionHandler {
 	return []serverExecutionHandler{
 		{
 			name: "creative_result_set_listening_followup",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				setKind := strings.TrimSpace(request.SetKind)
 				operation := strings.TrimSpace(request.Operation)
 				return (setKind == "creative_albums" || setKind == "semantic_albums") &&
 					(operation == "filter_by_play_window" || operation == "most_recent")
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveAlbumResultSetListeningFollowUpOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveAlbumResultSetListeningFollowUpOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}
@@ -126,7 +131,8 @@ func creativeExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "creative_result_set_followup",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				setKind := strings.TrimSpace(request.SetKind)
 				operation := strings.TrimSpace(request.Operation)
 				if setKind != "creative_albums" && setKind != "semantic_albums" {
@@ -139,8 +145,8 @@ func creativeExecutionHandlers() []serverExecutionHandler {
 					return false
 				}
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveStructuredCreativeAlbumSetFollowUpOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredCreativeAlbumSetFollowUpOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}
@@ -428,17 +434,18 @@ func creativeCandidatesFromResolvedReference(sessionID string, resolved *resolve
 	if resolved == nil {
 		return nil, "", false
 	}
+	memory := loadTurnSessionMemory(sessionID)
 	ref := resolved.resultReference()
 	switch ref.effectiveSetKind() {
 	case "", "creative_albums":
-		candidates, updatedAt, mode, _ := getLastCreativeAlbumSet(sessionID)
-		if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextCreativeAlbumTTL {
+		candidates, updatedAt, mode, _, ok := memory.CreativeAlbumSet()
+		if !ok || len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextCreativeAlbumTTL {
 			return nil, "", false
 		}
 		return candidates, mode, true
 	case "semantic_albums":
-		matches, updatedAt, queryText := getLastSemanticAlbumSearch(sessionID)
-		if len(matches) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextSemanticAlbumTTL {
+		matches, updatedAt, queryText, ok := memory.SemanticAlbumSearch()
+		if !ok || len(matches) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextSemanticAlbumTTL {
 			return nil, "", false
 		}
 		mode := "semantic_album_search"

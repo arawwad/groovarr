@@ -77,8 +77,8 @@ func (s *Server) startDiscoveredAlbumsApplyPreview(ctx context.Context, selectio
 	sessionID := chatSessionIDFromContext(ctx)
 	action, selectedCount, ok := s.buildDiscoveredAlbumsPendingAction(ctx, selection, time.Time{})
 	if !ok {
-		candidates, updatedAt, _ := getLastDiscoveredAlbums(sessionID)
-		if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > 30*time.Minute {
+		candidates, updatedAt, _, found := loadTurnSessionMemory(sessionID).DiscoveredAlbums()
+		if !found || len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > 30*time.Minute {
 			return "I don't have a recent discovered album list in this chat yet. Ask me to discover albums first.", nil, nil
 		}
 		if strings.TrimSpace(selection) != "" && !strings.EqualFold(strings.TrimSpace(selection), "all") {
@@ -93,8 +93,8 @@ func (s *Server) startLidarrCleanupApplyPreview(ctx context.Context, action, sel
 	sessionID := chatSessionIDFromContext(ctx)
 	pendingAction, selectedCount, resolvedAction, ok := s.buildLidarrCleanupPendingAction(ctx, action, selection, time.Time{})
 	if !ok {
-		candidates, updatedAt := getLastLidarrCandidates(sessionID)
-		if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > 20*time.Minute {
+		candidates, updatedAt, found := loadTurnSessionMemory(sessionID).CleanupCandidates()
+		if !found || len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > 20*time.Minute {
 			return "I don't have a recent cleanup preview in this chat yet. Ask me to preview library cleanup first.", nil, nil
 		}
 		if strings.TrimSpace(selection) != "" && !strings.EqualFold(strings.TrimSpace(selection), "all") {
@@ -106,8 +106,8 @@ func (s *Server) startLidarrCleanupApplyPreview(ctx context.Context, action, sel
 }
 
 func (s *Server) executeBadlyRatedAlbumsCleanupApproval(ctx context.Context, updatedAt time.Time, selection string) (string, error) {
-	candidates, cachedAt := getLastBadlyRatedAlbums(chatSessionIDFromContext(ctx))
-	if len(candidates) == 0 || cachedAt.IsZero() {
+	candidates, cachedAt, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).BadlyRatedAlbums()
+	if !ok || len(candidates) == 0 || cachedAt.IsZero() {
 		return "", fmt.Errorf("badly rated album preview is no longer available")
 	}
 	if cachedAt.UnixNano() != updatedAt.UnixNano() {
@@ -1658,8 +1658,8 @@ func recommendedLidarrCleanupAction(candidates []lidarrCleanupCandidate) string 
 }
 
 func (s *Server) executeLidarrCleanupApproval(ctx context.Context, updatedAt time.Time, action, selection string) (string, error) {
-	candidates, cachedAt := getLastLidarrCandidates(chatSessionIDFromContext(ctx))
-	if len(candidates) == 0 || cachedAt.IsZero() {
+	candidates, cachedAt, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).CleanupCandidates()
+	if !ok || len(candidates) == 0 || cachedAt.IsZero() {
 		return "", fmt.Errorf("cleanup preview is no longer available")
 	}
 	if cachedAt.UnixNano() != updatedAt.UnixNano() {
@@ -1727,8 +1727,8 @@ func (s *Server) executeLidarrCleanupApproval(ctx context.Context, updatedAt tim
 }
 
 func (s *Server) executeDiscoveredAlbumsApproval(ctx context.Context, discoveredAt time.Time, selection string) (string, error) {
-	candidates, cachedAt, sourceQuery := getLastDiscoveredAlbums(chatSessionIDFromContext(ctx))
-	if len(candidates) == 0 || cachedAt.IsZero() {
+	candidates, cachedAt, sourceQuery, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).DiscoveredAlbums()
+	if !ok || len(candidates) == 0 || cachedAt.IsZero() {
 		return "", fmt.Errorf("discovered album preview is no longer available")
 	}
 	if cachedAt.UnixNano() != discoveredAt.UnixNano() {
@@ -1830,8 +1830,8 @@ func (s *Server) executeDiscoveredAlbumsApproval(ctx context.Context, discovered
 }
 
 func (s *Server) executePlaylistCreateApproval(ctx context.Context, plannedAt time.Time) (string, error) {
-	_, _, cachedAt, planned := getLastPlannedPlaylist(chatSessionIDFromContext(ctx))
-	if len(planned) == 0 || cachedAt.IsZero() {
+	_, _, cachedAt, planned, _, _, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).PlaylistContext()
+	if !ok || len(planned) == 0 || cachedAt.IsZero() {
 		return "", fmt.Errorf("playlist plan is no longer available")
 	}
 	if cachedAt.UnixNano() != plannedAt.UnixNano() {

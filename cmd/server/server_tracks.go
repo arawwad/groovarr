@@ -30,12 +30,13 @@ func trackExecutionHandlers() []serverExecutionHandler {
 	return []serverExecutionHandler{
 		{
 			name: "song_path_summary",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "song_path" &&
 					(strings.TrimSpace(request.Operation) == "describe_item" || strings.TrimSpace(request.Domain) == "track_discovery")
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				if resp, ok := s.handleStructuredSongPathSummary(ctx, resolved); ok {
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				if resp, ok := s.handleStructuredSongPathSummaryTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
 				return ChatResponse{}, false
@@ -43,12 +44,13 @@ func trackExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "track_candidates_pick_variant",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "track_candidates" &&
 					(strings.TrimSpace(request.Operation) == "pick_riskier" || strings.TrimSpace(request.Operation) == "pick_safer")
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				if resp, ok := s.handleStructuredTrackVariantPick(ctx, resolved); ok {
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				if resp, ok := s.handleStructuredTrackVariantPickTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
 				return ChatResponse{}, false
@@ -56,12 +58,13 @@ func trackExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "track_candidates_compare",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "track_candidates" &&
 					strings.TrimSpace(request.Operation) == "compare"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				if resp, ok := s.handleStructuredTrackCompare(ctx, resolved); ok {
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				if resp, ok := s.handleStructuredTrackCompareTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
 				return ChatResponse{}, false
@@ -69,15 +72,16 @@ func trackExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "track_candidates_description",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "track_candidates" &&
 					(strings.TrimSpace(request.Operation) == "describe_item" || strings.TrimSpace(request.Domain) == "track_discovery")
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				if resp, ok := s.handleStructuredTrackDescription(ctx, resolved); ok {
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				if resp, ok := s.handleStructuredTrackDescriptionTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
-				if resp, ok := s.handleStructuredTrackSimilarity(ctx, "", resolved); ok {
+				if resp, ok := s.handleStructuredTrackSimilarityTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
 				return ChatResponse{}, false
@@ -85,12 +89,13 @@ func trackExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "artist_candidates_pick_variant",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "artist_candidates" &&
 					(strings.TrimSpace(request.Operation) == "pick_riskier" || strings.TrimSpace(request.Operation) == "pick_safer")
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				if resp, ok := s.handleStructuredArtistVariantPick(ctx, resolved); ok {
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				if resp, ok := s.handleStructuredArtistVariantPickTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
 				return ChatResponse{}, false
@@ -98,12 +103,13 @@ func trackExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "artist_candidates_compare",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "artist_candidates" &&
 					strings.TrimSpace(request.Operation) == "compare"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				if resp, ok := s.handleStructuredArtistCompare(ctx, resolved); ok {
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				if resp, ok := s.handleStructuredArtistCompareTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
 				return ChatResponse{}, false
@@ -111,12 +117,13 @@ func trackExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "artist_candidates_starting_album",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "artist_candidates" &&
 					strings.TrimSpace(request.Domain) == "artist_discovery"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				if resp, ok := s.handleStructuredArtistStartingAlbum(ctx, resolved); ok {
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				if resp, ok := s.handleStructuredArtistStartingAlbumTurn(ctx, turn); ok {
 					return ChatResponse{Response: resp}, true
 				}
 				return ChatResponse{}, false
@@ -150,6 +157,10 @@ func (s *Server) handleStructuredTrackVariantPick(ctx context.Context, resolved 
 	return fmt.Sprintf("%s %s.", prefix, formatTrackCandidate(pick)), true
 }
 
+func (s *Server) handleStructuredTrackVariantPickTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredTrackVariantPick(ctx, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredArtistVariantPick(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil {
 		return "", false
@@ -175,36 +186,66 @@ func (s *Server) handleStructuredArtistVariantPick(ctx context.Context, resolved
 	return fmt.Sprintf("%s %s.", prefix, strings.TrimSpace(pick.Name)), true
 }
 
+func (s *Server) handleStructuredArtistVariantPickTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredArtistVariantPick(ctx, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredTrackCompare(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.ResultAction) != "compare" {
 		return "", false
 	}
-	candidates, _, ok := trackCandidatesFromResolvedReference(chatSessionIDFromContext(ctx), resolved)
-	if !ok {
-		all, _, _, _ := getLastTrackCandidateSet(chatSessionIDFromContext(ctx))
-		candidates = all
+	ref := resolved.resultReference()
+	sessionID := chatSessionIDFromContext(ctx)
+	memory := loadTurnSessionMemory(sessionID)
+	candidates, _, _, _, found := memory.TrackCandidateSet()
+	if !found || len(candidates) == 0 {
+		selected, _, ok := trackCandidatesFromResolvedReference(sessionID, resolved)
+		if !ok {
+			return "", false
+		}
+		candidates = selected
 	}
-	primary, secondary, ok := resolveTrackComparisonPair(resolved.Turn, candidates)
+	primary, secondary, sameItem, ok := resolveTrackComparisonPair(ref, resolved.Turn, candidates)
 	if !ok {
+		if sameItem {
+			return fmt.Sprintf("%s is already the first result, so there isn't a second track to compare it against.", formatTrackCandidate(primary)), true
+		}
 		return "", false
 	}
 	return renderTrackCandidateComparison(primary, secondary), true
+}
+
+func (s *Server) handleStructuredTrackCompareTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredTrackCompare(ctx, turnToResolvedTurnContext(turn))
 }
 
 func (s *Server) handleStructuredArtistCompare(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.ResultAction) != "compare" {
 		return "", false
 	}
-	candidates, _, ok := artistCandidatesFromResolvedReference(chatSessionIDFromContext(ctx), resolved)
-	if !ok {
-		all, _, _ := getLastArtistCandidateSet(chatSessionIDFromContext(ctx))
-		candidates = all
+	ref := resolved.resultReference()
+	sessionID := chatSessionIDFromContext(ctx)
+	memory := loadTurnSessionMemory(sessionID)
+	candidates, _, _, found := memory.ArtistCandidateSet()
+	if !found || len(candidates) == 0 {
+		selected, _, ok := artistCandidatesFromResolvedReference(sessionID, resolved)
+		if !ok {
+			return "", false
+		}
+		candidates = selected
 	}
-	primary, secondary, ok := resolveArtistComparisonPair(resolved.Turn, candidates)
+	primary, secondary, sameItem, ok := resolveArtistComparisonPair(ref, resolved.Turn, candidates)
 	if !ok {
+		if sameItem {
+			return fmt.Sprintf("%s is already the first result, so there isn't a second artist to compare against.", strings.TrimSpace(primary.Name)), true
+		}
 		return "", false
 	}
 	return renderArtistCandidateComparison(primary, secondary), true
+}
+
+func (s *Server) handleStructuredArtistCompareTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredArtistCompare(ctx, turnToResolvedTurnContext(turn))
 }
 
 func (s *Server) handleStructuredTrackSearch(ctx context.Context, rawMsg string, resolved *resolvedTurnContext) (string, bool) {
@@ -240,15 +281,23 @@ func (s *Server) handleStructuredTrackSearch(ctx context.Context, rawMsg string,
 	return renderTrackCandidateSet("Closest track matches in your library", candidates, 5), true
 }
 
+func (s *Server) handleStructuredTrackSearchTurn(ctx context.Context, turn *Turn) (string, bool) {
+	if turn == nil {
+		return "", false
+	}
+	return s.handleStructuredTrackSearch(ctx, turn.UserMessage, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredSongPathSummary(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.SubIntent) != "song_path_summary" {
 		return "", false
 	}
-	state, ok := getLastSongPath(chatSessionIDFromContext(ctx))
+	state, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).SongPath()
 	if !ok || len(state.path) == 0 {
 		return "", false
 	}
 	middle := state.path[len(state.path)/2]
+	setLastFocusedResultItem(chatSessionIDFromContext(ctx), "song_path", normalizedSongPathTrackKey(middle))
 	args := map[string]interface{}{
 		"neighborLimit": 4,
 	}
@@ -267,6 +316,10 @@ func (s *Server) handleStructuredSongPathSummary(ctx context.Context, resolved *
 		}
 	}
 	return renderSongPathFallback(state), true
+}
+
+func (s *Server) handleStructuredSongPathSummaryTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredSongPathSummary(ctx, turnToResolvedTurnContext(turn))
 }
 
 func (s *Server) handleStructuredTrackSimilarity(ctx context.Context, rawMsg string, resolved *resolvedTurnContext) (string, bool) {
@@ -314,6 +367,13 @@ func (s *Server) handleStructuredTrackSimilarity(ctx context.Context, rawMsg str
 	return renderTrackCandidateSet(fmt.Sprintf("Nearest tracks to %s", formatTrackSeed(seed)), candidates, 5), true
 }
 
+func (s *Server) handleStructuredTrackSimilarityTurn(ctx context.Context, turn *Turn) (string, bool) {
+	if turn == nil {
+		return "", false
+	}
+	return s.handleStructuredTrackSimilarity(ctx, turn.UserMessage, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredTrackDescription(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.SubIntent) != "track_description" {
 		return "", false
@@ -351,6 +411,10 @@ func (s *Server) handleStructuredTrackDescription(ctx context.Context, resolved 
 	return renderTrackDescriptionOutcome(outcome), true
 }
 
+func (s *Server) handleStructuredTrackDescriptionTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredTrackDescription(ctx, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredArtistSimilarity(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.SubIntent) != "artist_similarity" {
 		return "", false
@@ -381,6 +445,10 @@ func (s *Server) handleStructuredArtistSimilarity(ctx context.Context, resolved 
 	return renderArtistCandidateSet(fmt.Sprintf("Nearest artists to %s in your library", artistName), candidates, 5), true
 }
 
+func (s *Server) handleStructuredArtistSimilarityTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredArtistSimilarity(ctx, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredArtistStartingAlbum(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
 	if resolved == nil || strings.TrimSpace(resolved.Turn.SubIntent) != "artist_starting_album" {
 		return "", false
@@ -406,6 +474,10 @@ func (s *Server) handleStructuredArtistStartingAlbum(ctx context.Context, resolv
 	}
 	setLastFocusedResultItem(chatSessionIDFromContext(ctx), "artist_candidates", normalizedArtistCandidateKey(artist))
 	return renderRouteBulletList(fmt.Sprintf("A good place to start with %s from your library", artist.Name), albums, 3), true
+}
+
+func (s *Server) handleStructuredArtistStartingAlbumTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredArtistStartingAlbum(ctx, turnToResolvedTurnContext(turn))
 }
 
 type trackSeed struct {
@@ -450,15 +522,8 @@ func resolveTrackSeed(ctx context.Context, resolved *resolvedTurnContext) (track
 		return trackSeed{}, false
 	}
 	if resolved.Turn.FollowupMode != "none" && strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" {
-		candidates, _, ok := trackCandidatesFromResolvedReference(chatSessionIDFromContext(ctx), resolved)
-		if ok && len(candidates) > 0 {
-			selected := selectTrackSeedCandidateFromIntent(resolved.Turn, candidates)
-			return trackSeed{
-				ID:         selected.ID,
-				Title:      selected.Title,
-				ArtistName: selected.ArtistName,
-				AlbumName:  selected.AlbumName,
-			}, true
+		if seed, ok := resolveTrackSeedFromReference(chatSessionIDFromContext(ctx), resolved); ok {
+			return seed, true
 		}
 	}
 	if title := strings.TrimSpace(resolved.Turn.TrackTitle); title != "" {
@@ -477,6 +542,47 @@ func resolveTrackSeed(ctx context.Context, resolved *resolvedTurnContext) (track
 		Title:      selected.Title,
 		ArtistName: selected.ArtistName,
 		AlbumName:  selected.AlbumName,
+	}, true
+}
+
+func resolveTrackSeedFromReference(sessionID string, resolved *resolvedTurnContext) (trackSeed, bool) {
+	if resolved == nil {
+		return trackSeed{}, false
+	}
+	if candidates, _, ok := trackCandidatesFromResolvedReference(sessionID, resolved); ok && len(candidates) > 0 {
+		selected := selectTrackSeedCandidateFromIntent(resolved.Turn, candidates)
+		return trackSeed{
+			ID:         selected.ID,
+			Title:      selected.Title,
+			ArtistName: selected.ArtistName,
+			AlbumName:  selected.AlbumName,
+		}, true
+	}
+	if strings.TrimSpace(resolved.ResolvedReferenceKind) != "song_path" {
+		return trackSeed{}, false
+	}
+	state, ok := loadTurnSessionMemory(sessionID).SongPath()
+	if !ok || len(state.path) == 0 {
+		return trackSeed{}, false
+	}
+	if key := strings.TrimSpace(resolved.ResolvedItemKey); key != "" {
+		for _, candidate := range state.path {
+			if normalizedSongPathTrackKey(candidate) == key {
+				return trackSeed{
+					ID:         candidate.ID,
+					Title:      candidate.Title,
+					ArtistName: candidate.ArtistName,
+					AlbumName:  candidate.AlbumName,
+				}, true
+			}
+		}
+	}
+	middle := state.path[len(state.path)/2]
+	return trackSeed{
+		ID:         middle.ID,
+		Title:      middle.Title,
+		ArtistName: middle.ArtistName,
+		AlbumName:  middle.AlbumName,
 	}, true
 }
 
@@ -548,31 +654,71 @@ func selectArtistSeedCandidateFromIntent(turn normalizedTurn, candidates []artis
 	}
 }
 
-func resolveTrackComparisonPair(turn normalizedTurn, candidates []trackCandidate) (trackCandidate, trackCandidate, bool) {
+func resolveTrackComparisonPair(ref resolvedResultReference, turn normalizedTurn, candidates []trackCandidate) (trackCandidate, trackCandidate, bool, bool) {
 	if len(candidates) < 2 {
-		return trackCandidate{}, trackCandidate{}, false
+		return trackCandidate{}, trackCandidate{}, false, false
 	}
-	primary := selectTrackSeedCandidateFromIntent(turn, candidates)
-	secondary, ok := selectTrackComparisonCandidate(turn, candidates, normalizedTrackCandidateKey(primary))
+	primary, ok := selectTrackPrimaryComparisonCandidate(ref, turn, candidates)
 	if !ok {
-		return trackCandidate{}, trackCandidate{}, false
+		return trackCandidate{}, trackCandidate{}, false, false
 	}
-	return primary, secondary, true
+	secondary, sameItem, ok := selectTrackComparisonCandidate(turn, candidates, normalizedTrackCandidateKey(primary))
+	if !ok {
+		return primary, trackCandidate{}, sameItem, false
+	}
+	return primary, secondary, false, true
 }
 
-func resolveArtistComparisonPair(turn normalizedTurn, candidates []artistCandidate) (artistCandidate, artistCandidate, bool) {
+func resolveArtistComparisonPair(ref resolvedResultReference, turn normalizedTurn, candidates []artistCandidate) (artistCandidate, artistCandidate, bool, bool) {
 	if len(candidates) < 2 {
-		return artistCandidate{}, artistCandidate{}, false
+		return artistCandidate{}, artistCandidate{}, false, false
 	}
-	primary := selectArtistSeedCandidateFromIntent(turn, candidates)
-	secondary, ok := selectArtistComparisonCandidate(turn, candidates, normalizedArtistCandidateKey(primary))
+	primary, ok := selectArtistPrimaryComparisonCandidate(ref, turn, candidates)
 	if !ok {
-		return artistCandidate{}, artistCandidate{}, false
+		return artistCandidate{}, artistCandidate{}, false, false
 	}
-	return primary, secondary, true
+	secondary, sameItem, ok := selectArtistComparisonCandidate(turn, candidates, normalizedArtistCandidateKey(primary))
+	if !ok {
+		return primary, artistCandidate{}, sameItem, false
+	}
+	return primary, secondary, false, true
 }
 
-func selectTrackComparisonCandidate(turn normalizedTurn, candidates []trackCandidate, excludeKey string) (trackCandidate, bool) {
+func selectTrackPrimaryComparisonCandidate(ref resolvedResultReference, turn normalizedTurn, candidates []trackCandidate) (trackCandidate, bool) {
+	if len(candidates) == 0 {
+		return trackCandidate{}, false
+	}
+	if ref.ResolvedItemKey != "" {
+		for _, candidate := range candidates {
+			if normalizedTrackCandidateKey(candidate) == ref.ResolvedItemKey {
+				return candidate, true
+			}
+		}
+	}
+	if selected, ok := selectTrackCandidates(ref, candidates); ok && len(selected) > 0 {
+		return selectTrackSeedCandidateFromIntent(turn, selected), true
+	}
+	return selectTrackSeedCandidateFromIntent(turn, candidates), true
+}
+
+func selectArtistPrimaryComparisonCandidate(ref resolvedResultReference, turn normalizedTurn, candidates []artistCandidate) (artistCandidate, bool) {
+	if len(candidates) == 0 {
+		return artistCandidate{}, false
+	}
+	if ref.ResolvedItemKey != "" {
+		for _, candidate := range candidates {
+			if normalizedArtistCandidateKey(candidate) == ref.ResolvedItemKey {
+				return candidate, true
+			}
+		}
+	}
+	if selected, ok := selectArtistCandidates(ref, candidates); ok && len(selected) > 0 {
+		return selectArtistSeedCandidateFromIntent(turn, selected), true
+	}
+	return selectArtistSeedCandidateFromIntent(turn, candidates), true
+}
+
+func selectTrackComparisonCandidate(turn normalizedTurn, candidates []trackCandidate, excludeKey string) (trackCandidate, bool, bool) {
 	selected, ok := selectTrackCandidates(resolvedResultReference{
 		resultReference: resultReference{
 			Selection: resultSelection{
@@ -582,17 +728,19 @@ func selectTrackComparisonCandidate(turn normalizedTurn, candidates []trackCandi
 		},
 	}, candidates)
 	if !ok {
-		return trackCandidate{}, false
+		return trackCandidate{}, false, false
 	}
+	sameItem := false
 	for _, candidate := range selected {
 		if normalizedTrackCandidateKey(candidate) != excludeKey {
-			return candidate, true
+			return candidate, false, true
 		}
+		sameItem = true
 	}
-	return trackCandidate{}, false
+	return trackCandidate{}, sameItem, false
 }
 
-func selectArtistComparisonCandidate(turn normalizedTurn, candidates []artistCandidate, excludeKey string) (artistCandidate, bool) {
+func selectArtistComparisonCandidate(turn normalizedTurn, candidates []artistCandidate, excludeKey string) (artistCandidate, bool, bool) {
 	selected, ok := selectArtistCandidates(resolvedResultReference{
 		resultReference: resultReference{
 			Selection: resultSelection{
@@ -602,19 +750,21 @@ func selectArtistComparisonCandidate(turn normalizedTurn, candidates []artistCan
 		},
 	}, candidates)
 	if !ok {
-		return artistCandidate{}, false
+		return artistCandidate{}, false, false
 	}
+	sameItem := false
 	for _, candidate := range selected {
 		if normalizedArtistCandidateKey(candidate) != excludeKey {
-			return candidate, true
+			return candidate, false, true
 		}
+		sameItem = true
 	}
-	return artistCandidate{}, false
+	return artistCandidate{}, sameItem, false
 }
 
 func trackCandidatesFromResolvedReference(sessionID string, resolved *resolvedTurnContext) ([]trackCandidate, string, bool) {
-	candidates, _, mode, _ := getLastTrackCandidateSet(sessionID)
-	if len(candidates) == 0 {
+	candidates, _, mode, _, ok := loadTurnSessionMemory(sessionID).TrackCandidateSet()
+	if !ok || len(candidates) == 0 {
 		return nil, "", false
 	}
 	ref := resolved.resultReference()
@@ -633,8 +783,8 @@ func trackCandidatesFromResolvedReference(sessionID string, resolved *resolvedTu
 }
 
 func artistCandidatesFromResolvedReference(sessionID string, resolved *resolvedTurnContext) ([]artistCandidate, string, bool) {
-	candidates, _, queryText := getLastArtistCandidateSet(sessionID)
-	if len(candidates) == 0 {
+	candidates, _, queryText, ok := loadTurnSessionMemory(sessionID).ArtistCandidateSet()
+	if !ok || len(candidates) == 0 {
 		return nil, "", false
 	}
 	ref := resolved.resultReference()

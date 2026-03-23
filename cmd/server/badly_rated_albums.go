@@ -38,15 +38,7 @@ var lastBadlyRatedAlbums = struct {
 }
 
 func setLastBadlyRatedAlbums(sessionID string, candidates []badlyRatedAlbumCandidate) {
-	cloned := make([]badlyRatedAlbumCandidate, len(candidates))
-	copy(cloned, candidates)
-
-	lastBadlyRatedAlbums.mu.Lock()
-	lastBadlyRatedAlbums.sessions[normalizeChatSessionID(sessionID)] = badlyRatedAlbumsState{
-		candidates: cloned,
-		updatedAt:  time.Now().UTC(),
-	}
-	lastBadlyRatedAlbums.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetBadlyRatedAlbums(candidates)
 }
 
 func getLastBadlyRatedAlbums(sessionID string) ([]badlyRatedAlbumCandidate, time.Time) {
@@ -94,8 +86,8 @@ func formatBadlyRatedAlbumsContext(updatedAt time.Time, candidates []badlyRatedA
 }
 
 func recentBadlyRatedAlbumsState(sessionID string, now time.Time) ([]badlyRatedAlbumCandidate, time.Time, bool) {
-	candidates, updatedAt := getLastBadlyRatedAlbums(sessionID)
-	if updatedAt.IsZero() || now.Sub(updatedAt) > llmContextBadlyRatedAlbumsTTL {
+	candidates, updatedAt, ok := loadTurnSessionMemory(sessionID).BadlyRatedAlbums()
+	if !ok || updatedAt.IsZero() || now.Sub(updatedAt) > llmContextBadlyRatedAlbumsTTL {
 		return nil, time.Time{}, false
 	}
 	return candidates, updatedAt, true
@@ -215,8 +207,8 @@ func matchBadlyRatedAlbumsInLidarr(candidates []badlyRatedAlbumCandidate, albums
 
 func (s *Server) buildBadlyRatedAlbumsCleanupPendingAction(ctx context.Context, selection string, minStateAt time.Time) (*PendingAction, int, bool) {
 	sessionID := chatSessionIDFromContext(ctx)
-	candidates, updatedAt := getLastBadlyRatedAlbums(sessionID)
-	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextBadlyRatedAlbumsTTL {
+	candidates, updatedAt, ok := loadTurnSessionMemory(sessionID).BadlyRatedAlbums()
+	if !ok || len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextBadlyRatedAlbumsTTL {
 		return nil, 0, false
 	}
 	if !minStateAt.IsZero() && updatedAt.Before(minStateAt) {

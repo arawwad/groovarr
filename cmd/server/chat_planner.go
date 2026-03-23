@@ -39,7 +39,12 @@ func newGroqTurnPlanner(apiKey, defaultModel string) chatTurnPlanner {
 	}
 }
 
-func (p *groqTurnPlanner) PlanTurn(ctx context.Context, msg string, history []agent.Message, resolved *resolvedTurnContext, sessionContext string) (orchestrationDecision, error) {
+func (p *groqTurnPlanner) PlanTurn(ctx context.Context, turn *Turn, history []agent.Message, sessionContext string) (orchestrationDecision, error) {
+	resolved := turnToResolvedTurnContext(turn)
+	msg := ""
+	if turn != nil {
+		msg = turn.UserMessage
+	}
 	systemPrompt := `You are a routing planner for a music assistant. Return strict JSON only.
 
 Schema:
@@ -121,6 +126,10 @@ func sanitizeOrchestrationDecision(decision orchestrationDecision, resolved *res
 				decision.DeterministicMode = "normalized_first"
 			}
 		}
+		if strings.TrimSpace(resolved.Turn.ResultAction) == "compare" && strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" {
+			decision.NextStage = "resolver"
+			decision.DeterministicMode = "none"
+		}
 	} else if decision.NextStage == "resolver" {
 		decision.NextStage = "responder"
 		decision.Reason = compactText("resolver_requires_normalized_turn", 180)
@@ -139,7 +148,13 @@ func (s *Server) maybePlanTurn(ctx context.Context, msg string, history []agent.
 		})
 		return nil
 	}
-	decision, err := s.planner.PlanTurn(ctx, msg, history, resolved, sessionContext)
+	turn := turnFromResolved(resolved)
+	if turn != nil {
+		turn.UserMessage = strings.TrimSpace(msg)
+		turn.SessionID = chatSessionIDFromContext(ctx)
+		turn = turn.withHistorySummary(renderNormalizerHistory(history))
+	}
+	decision, err := s.planner.PlanTurn(ctx, turn, history, sessionContext)
 	if err != nil {
 		log.Warn().Err(err).Str("request_id", chatRequestIDFromContext(ctx)).Msg("Chat planner failed")
 		return nil
@@ -155,6 +170,12 @@ func (s *Server) executeOrchestrationDecision(ctx context.Context, msg string, h
 	if decision == nil {
 		return ChatResponse{}, false
 	}
+	turn := turnFromResolved(resolved)
+	if turn != nil {
+		turn.UserMessage = strings.TrimSpace(msg)
+		turn.SessionID = chatSessionIDFromContext(ctx)
+		turn = turn.withHistorySummary(renderNormalizerHistory(history))
+	}
 	switch decision.NextStage {
 	case "clarify":
 		prompt := strings.TrimSpace(decision.ClarificationPrompt)
@@ -169,7 +190,7 @@ func (s *Server) executeOrchestrationDecision(ctx context.Context, msg string, h
 	case "deterministic":
 		switch decision.DeterministicMode {
 		case "normalized_first":
-			if resp, ok := s.tryNormalizedIntentRoute(ctx, msg, history, resolved); ok {
+			if resp, ok := s.tryTurnIntentRoute(ctx, turn, history); ok {
 				logChatPipelineStage(ctx, "plan_executed", map[string]string{
 					"next_stage":         "deterministic",
 					"deterministic_mode": decision.DeterministicMode,
@@ -179,7 +200,7 @@ func (s *Server) executeOrchestrationDecision(ctx context.Context, msg string, h
 				return resp, true
 			}
 		default:
-			if resp, ok := s.tryNormalizedIntentRoute(ctx, msg, history, resolved); ok {
+			if resp, ok := s.tryTurnIntentRoute(ctx, turn, history); ok {
 				logChatPipelineStage(ctx, "plan_executed", map[string]string{
 					"next_stage":         "deterministic",
 					"deterministic_mode": decision.DeterministicMode,
@@ -191,21 +212,21 @@ func (s *Server) executeOrchestrationDecision(ctx context.Context, msg string, h
 		}
 	case "responder", "resolver":
 		if decision.NextStage == "resolver" {
-			resolverDecision, execReq := s.maybeResolveExecutionRequest(ctx, resolved)
+			turn, resolverDecision := s.maybeResolveExecutionRequest(ctx, turn)
 			if resolverDecision != nil {
 				logFields := map[string]string{
 					"next_stage": decision.NextStage,
 					"reason":     resolverDecision.Reason,
 				}
-				if execReq != nil {
-					logFields["execution_request"] = renderServerExecutionRequest(*execReq)
+				if turn != nil && strings.TrimSpace(turn.Execution.Operation) != "" {
+					logFields["execution_request"] = renderServerExecutionRequest(executionRequestFromTurn(turn))
 				}
 				logChatPipelineStage(ctx, "resolver", logFields)
 				if resolverDecision.NeedsClarification {
 					return ChatResponse{Response: resolverDecision.ClarificationPrompt}, true
 				}
-				if execReq != nil {
-					if resp, ok := s.executeServerExecutionRequest(ctx, history, resolved, *execReq); ok {
+				if turn != nil && strings.TrimSpace(turn.Execution.Operation) != "" {
+					if resp, ok := s.executeServerExecutionRequest(ctx, history, turn); ok {
 						return resp, true
 					}
 				}

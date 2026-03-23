@@ -62,6 +62,8 @@ Current file ownership inside `cmd/server`:
   - normalized-first server route execution
 - `ORCHESTRATION.md`
   - staged chat contract, field ownership, and contract-expansion rules
+- `../CHAT_EXECUTION_DIRECTION.md`
+  - forward direction for model-led interpretation, audit/repair, and minimal deterministic routing
 - `server_playlists.go`
   - saved-playlist reads, follow-ups, append flow, and playlist-availability follow-ups
 - `server_discovery.go`

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"sync"
 	"time"
 )
@@ -33,17 +32,7 @@ var lastCreativeAlbumSet = creativeAlbumSetStore{
 }
 
 func setLastCreativeAlbumSet(sessionID, mode, queryText string, candidates []creativeAlbumCandidate) {
-	copied := make([]creativeAlbumCandidate, len(candidates))
-	copy(copied, candidates)
-
-	lastCreativeAlbumSet.mu.Lock()
-	lastCreativeAlbumSet.sessions[normalizeChatSessionID(sessionID)] = creativeAlbumSetState{
-		mode:       strings.TrimSpace(mode),
-		queryText:  strings.TrimSpace(queryText),
-		updatedAt:  time.Now().UTC(),
-		candidates: copied,
-	}
-	lastCreativeAlbumSet.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetCreativeAlbumSet(mode, queryText, candidates)
 }
 
 func getLastCreativeAlbumSet(sessionID string) ([]creativeAlbumCandidate, time.Time, string, string) {

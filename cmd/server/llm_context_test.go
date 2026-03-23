@@ -190,6 +190,66 @@ func TestBuildLLMSessionContextIncludesRecentListening(t *testing.T) {
 	}
 }
 
+func TestBuildLLMSessionContextIncludesTrackAndArtistCandidates(t *testing.T) {
+	lastTrackCandidateSet.mu.Lock()
+	lastTrackCandidateSet.sessions = make(map[string]trackCandidateSetState)
+	lastTrackCandidateSet.mu.Unlock()
+	lastArtistCandidateSet.mu.Lock()
+	lastArtistCandidateSet.sessions = make(map[string]artistCandidateSetState)
+	lastArtistCandidateSet.mu.Unlock()
+
+	setLastTrackCandidateSet("session-track-candidates", "similar_tracks", "Windowlicker", []trackCandidate{
+		{ID: "t1", Title: "Doll", ArtistName: "Foo Fighters"},
+		{ID: "t2", Title: "Gold", ArtistName: "Imagine Dragons"},
+	})
+	setLastArtistCandidateSet("session-track-candidates", "Radiohead", []artistCandidate{
+		{ID: "a1", Name: "Blur"},
+		{ID: "a2", Name: "Elbow"},
+	})
+
+	srv := &Server{}
+	got := srv.buildLLMSessionContext("session-track-candidates")
+	if !strings.Contains(got, "last_track_candidates") {
+		t.Fatalf("buildLLMSessionContext() = %q", got)
+	}
+	if !strings.Contains(got, "Doll by Foo Fighters") {
+		t.Fatalf("buildLLMSessionContext() = %q", got)
+	}
+	if !strings.Contains(got, "last_artist_candidates") {
+		t.Fatalf("buildLLMSessionContext() = %q", got)
+	}
+	if !strings.Contains(got, `sample="Blur | Elbow"`) {
+		t.Fatalf("buildLLMSessionContext() = %q", got)
+	}
+}
+
+func TestBuildLLMSessionContextIncludesFocusedResultItem(t *testing.T) {
+	lastTrackCandidateSet.mu.Lock()
+	lastTrackCandidateSet.sessions = make(map[string]trackCandidateSetState)
+	lastTrackCandidateSet.mu.Unlock()
+	lastFocusedResultItem.mu.Lock()
+	lastFocusedResultItem.sessions = make(map[string]focusedResultItemState)
+	lastFocusedResultItem.mu.Unlock()
+
+	setLastTrackCandidateSet("session-focused", "similar_tracks", "Windowlicker", []trackCandidate{
+		{ID: "t1", Title: "Doll", ArtistName: "Foo Fighters"},
+	})
+	setLastFocusedResultItem("session-focused", "track_candidates", normalizedTrackCandidateKey(trackCandidate{
+		ID:         "t1",
+		Title:      "Doll",
+		ArtistName: "Foo Fighters",
+	}))
+
+	srv := &Server{}
+	got := srv.buildLLMSessionContext("session-focused")
+	if !strings.Contains(got, "focused_result_item") {
+		t.Fatalf("buildLLMSessionContext() = %q", got)
+	}
+	if !strings.Contains(got, `label="Doll by Foo Fighters"`) {
+		t.Fatalf("buildLLMSessionContext() = %q", got)
+	}
+}
+
 func TestFormatStructuredChatMemoryIncludesFacts(t *testing.T) {
 	now := time.Date(2026, time.March, 15, 12, 0, 0, 0, time.UTC)
 	got := formatStructuredChatMemory(chatSessionMemory{

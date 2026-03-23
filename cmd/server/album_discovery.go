@@ -68,7 +68,7 @@ type discoveredAlbumApplyOptions struct {
 }
 
 func setLastDiscoveredAlbums(sessionID, query string, candidates []discoveredAlbumCandidate) {
-	lastAlbumDiscovery.Set(normalizeChatSessionID(sessionID), query, candidates)
+	newTurnSessionMemoryWriter(sessionID).SetDiscoveredAlbums(query, candidates)
 }
 
 func getLastDiscoveredAlbums(sessionID string) ([]discoveredAlbumCandidate, time.Time, string) {
@@ -446,8 +446,8 @@ func withApplySuccess(item applyDiscoveredAlbumItem, albumMonitored bool) applyD
 }
 
 func resolveDiscoveredAlbumSelection(ctx context.Context, args map[string]interface{}) ([]discoveredAlbumCandidate, time.Time, string, error) {
-	candidates, updatedAt, sourceQuery := getLastDiscoveredAlbums(chatSessionIDFromContext(ctx))
-	if len(candidates) == 0 {
+	candidates, updatedAt, sourceQuery, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).DiscoveredAlbums()
+	if !ok || len(candidates) == 0 {
 		return nil, time.Time{}, "", fmt.Errorf("no discovered albums cached yet; run discoverAlbums first")
 	}
 	if time.Since(updatedAt) > 30*time.Minute {

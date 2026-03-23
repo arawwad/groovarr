@@ -109,7 +109,11 @@ func (discoveredAlbumsAdapter) Capability() resultSetCapability {
 }
 
 func (discoveredAlbumsAdapter) ResolveSelection(sessionID string, ref resolvedResultReference) (resultSetSelection, bool) {
-	candidates, updatedAt, _ := getLastDiscoveredAlbums(sessionID)
+	memory := loadTurnSessionMemory(sessionID)
+	candidates, updatedAt, _, ok := memory.DiscoveredAlbums()
+	if !ok {
+		return resultSetSelection{}, false
+	}
 	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextDiscoveredAlbumsTTL {
 		return resultSetSelection{}, false
 	}
@@ -142,7 +146,11 @@ func (discoveredAlbumsAdapter) ResolveSelection(sessionID string, ref resolvedRe
 }
 
 func (discoveredAlbumsAdapter) HandleAction(ctx context.Context, s *Server, sessionID string, ref resolvedResultReference, selection resultSetSelection) (resultSetActionResult, bool) {
-	candidates, updatedAt, sourceQuery := getLastDiscoveredAlbums(sessionID)
+	memory := loadTurnSessionMemory(sessionID)
+	candidates, updatedAt, sourceQuery, ok := memory.DiscoveredAlbums()
+	if !ok {
+		return resultSetActionResult{}, false
+	}
 	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextDiscoveredAlbumsTTL {
 		return resultSetActionResult{}, false
 	}
@@ -230,7 +238,11 @@ func (cleanupCandidatesAdapter) Capability() resultSetCapability {
 }
 
 func (cleanupCandidatesAdapter) ResolveSelection(sessionID string, ref resolvedResultReference) (resultSetSelection, bool) {
-	candidates, updatedAt := getLastLidarrCandidates(sessionID)
+	memory := loadTurnSessionMemory(sessionID)
+	candidates, updatedAt, ok := memory.CleanupCandidates()
+	if !ok {
+		return resultSetSelection{}, false
+	}
 	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextCleanupTTL {
 		return resultSetSelection{}, false
 	}
@@ -276,7 +288,11 @@ func (badlyRatedAlbumsAdapter) Capability() resultSetCapability {
 }
 
 func (badlyRatedAlbumsAdapter) ResolveSelection(sessionID string, ref resolvedResultReference) (resultSetSelection, bool) {
-	candidates, updatedAt := getLastBadlyRatedAlbums(sessionID)
+	memory := loadTurnSessionMemory(sessionID)
+	candidates, updatedAt, ok := memory.BadlyRatedAlbums()
+	if !ok {
+		return resultSetSelection{}, false
+	}
 	if len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextBadlyRatedAlbumsTTL {
 		return resultSetSelection{}, false
 	}
@@ -311,7 +327,8 @@ func (badlyRatedAlbumsAdapter) HandleAction(ctx context.Context, s *Server, sess
 			Count:         selectedCount,
 		}, true
 	}
-	if candidates, _, recent := recentBadlyRatedAlbumsState(sessionID, time.Now().UTC()); recent {
+	memory := loadTurnSessionMemory(sessionID)
+	if candidates, updatedAt, ok := memory.BadlyRatedAlbums(); ok && !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextBadlyRatedAlbumsTTL {
 		if len(candidates) > 0 {
 			return resultSetActionResult{}, false
 		}
@@ -339,7 +356,8 @@ func (sceneCandidatesAdapter) Capability() resultSetCapability {
 }
 
 func (sceneCandidatesAdapter) ResolveSelection(sessionID string, ref resolvedResultReference) (resultSetSelection, bool) {
-	state, ok := getLastSceneSelection(sessionID)
+	memory := loadTurnSessionMemory(sessionID)
+	state, ok := memory.SceneSelection()
 	if !ok || state.UpdatedAt.IsZero() || time.Since(state.UpdatedAt) > llmContextSceneTTL {
 		return resultSetSelection{}, false
 	}
@@ -369,6 +387,9 @@ func (sceneCandidatesAdapter) HandleAction(_ context.Context, _ *Server, session
 		return resultSetActionResult{}, false
 	}
 	setLastSceneSelection(sessionID, selected, nil)
+	if key := strings.TrimSpace(selected.Key); key != "" {
+		setLastFocusedResultItem(sessionID, "scene_candidates", key)
+	}
 	return resultSetActionResult{Kind: "scene_select", Scene: selected}, true
 }
 

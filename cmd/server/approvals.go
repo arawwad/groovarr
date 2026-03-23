@@ -356,8 +356,8 @@ func (s *Server) tryConversationalPendingAction(ctx context.Context, msg string)
 
 func (s *Server) pendingPlaylistCreateAction(ctx context.Context, minStateAt time.Time) *PendingAction {
 	sessionID := chatSessionIDFromContext(ctx)
-	prompt, playlistName, plannedAt, candidates := getLastPlannedPlaylist(sessionID)
-	if len(candidates) == 0 || plannedAt.IsZero() || plannedAt.Before(minStateAt) {
+	prompt, playlistName, plannedAt, candidates, _, _, ok := loadTurnSessionMemory(sessionID).PlaylistContext()
+	if !ok || len(candidates) == 0 || plannedAt.IsZero() || plannedAt.Before(minStateAt) {
 		return nil
 	}
 	if strings.TrimSpace(playlistName) == "" {
@@ -397,8 +397,8 @@ func (s *Server) pendingDiscoveredAlbumsAction(ctx context.Context, minStateAt t
 
 func (s *Server) buildDiscoveredAlbumsPendingAction(ctx context.Context, selection string, minStateAt time.Time) (*PendingAction, int, bool) {
 	sessionID := chatSessionIDFromContext(ctx)
-	candidates, discoveredAt, sourceQuery := getLastDiscoveredAlbums(sessionID)
-	if len(candidates) == 0 || discoveredAt.IsZero() {
+	candidates, discoveredAt, sourceQuery, ok := loadTurnSessionMemory(sessionID).DiscoveredAlbums()
+	if !ok || len(candidates) == 0 || discoveredAt.IsZero() {
 		return nil, 0, false
 	}
 	if time.Since(discoveredAt) > 30*time.Minute {
@@ -471,8 +471,8 @@ func wantsDiscoveredAlbumApproval(msg string) bool {
 
 func (s *Server) buildLidarrCleanupPendingAction(ctx context.Context, requestedAction, selection string, minStateAt time.Time) (*PendingAction, int, string, bool) {
 	sessionID := chatSessionIDFromContext(ctx)
-	candidates, updatedAt := getLastLidarrCandidates(sessionID)
-	if len(candidates) == 0 || updatedAt.IsZero() || updatedAt.Before(minStateAt) {
+	candidates, updatedAt, ok := loadTurnSessionMemory(sessionID).CleanupCandidates()
+	if !ok || len(candidates) == 0 || updatedAt.IsZero() || updatedAt.Before(minStateAt) {
 		return nil, 0, "", false
 	}
 

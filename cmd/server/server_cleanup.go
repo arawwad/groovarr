@@ -24,6 +24,10 @@ func (s *Server) handleStructuredArtistRemoval(ctx context.Context, resolved *re
 	return response, pendingAction, true
 }
 
+func (s *Server) handleStructuredArtistRemovalTurn(ctx context.Context, turn *Turn) (string, *PendingAction, bool) {
+	return s.handleStructuredArtistRemoval(ctx, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) resolveStructuredLidarrCleanupApplyOutcome(ctx context.Context, resolved *resolvedTurnContext) (resultSetActionResult, bool) {
 	if resolved == nil {
 		return resultSetActionResult{}, false
@@ -60,6 +64,10 @@ func (s *Server) handleStructuredLidarrCleanupApply(ctx context.Context, resolve
 		return "", nil, false
 	}
 	return resp.Response, resp.PendingAction, true
+}
+
+func (s *Server) handleStructuredLidarrCleanupApplyTurn(ctx context.Context, turn *Turn) (string, *PendingAction, bool) {
+	return s.handleStructuredLidarrCleanupApply(ctx, turnToResolvedTurnContext(turn))
 }
 
 func (s *Server) resolveStructuredBadlyRatedCleanupOutcome(ctx context.Context, resolved *resolvedTurnContext) (resultSetActionResult, bool) {
@@ -104,16 +112,21 @@ func (s *Server) handleStructuredBadlyRatedCleanup(ctx context.Context, resolved
 	return resp.Response, resp.PendingAction, true
 }
 
+func (s *Server) handleStructuredBadlyRatedCleanupTurn(ctx context.Context, turn *Turn) (string, *PendingAction, bool) {
+	return s.handleStructuredBadlyRatedCleanup(ctx, turnToResolvedTurnContext(turn))
+}
+
 func cleanupExecutionHandlers() []serverExecutionHandler {
 	return []serverExecutionHandler{
 		{
 			name: "cleanup_preview_apply",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "cleanup_candidates" &&
 					strings.TrimSpace(request.Operation) == "preview_apply"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveStructuredLidarrCleanupApplyOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredLidarrCleanupApplyOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}
@@ -125,12 +138,13 @@ func cleanupExecutionHandlers() []serverExecutionHandler {
 		},
 		{
 			name: "badly_rated_preview_apply",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "badly_rated_albums" &&
 					strings.TrimSpace(request.Operation) == "preview_apply"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveStructuredBadlyRatedCleanupOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredBadlyRatedCleanupOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}

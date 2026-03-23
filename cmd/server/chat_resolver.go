@@ -46,17 +46,18 @@ func newGroqTurnResolver(apiKey, defaultModel string) chatTurnResolver {
 	}
 }
 
-func (defaultTurnResolver) ResolveTurn(_ context.Context, request resultSetResolverRequest) (resultSetResolverDecision, error) {
+func (defaultTurnResolver) ResolveTurn(_ context.Context, turnState *Turn) (resultSetResolverDecision, error) {
+	request := buildResultSetResolverRequestFromTurn(turnState)
 	turn := request.Turn
 	decision := resultSetResolverDecision{
-		SetKind:        strings.TrimSpace(turn.Reference.ResolvedSet),
-		ItemKey:        strings.TrimSpace(turn.Reference.ResolvedItemKey),
-		Operation:      strings.TrimSpace(turn.Workflow.Action),
-		SelectionMode:  strings.TrimSpace(turn.Workflow.SelectionMode),
-		SelectionValue: strings.TrimSpace(turn.Workflow.SelectionValue),
+		SetKind:               strings.TrimSpace(turn.Reference.ResolvedSet),
+		ItemKey:               strings.TrimSpace(turn.Reference.ResolvedItemKey),
+		Operation:             strings.TrimSpace(turn.Workflow.Action),
+		SelectionMode:         strings.TrimSpace(turn.Workflow.SelectionMode),
+		SelectionValue:        strings.TrimSpace(turn.Workflow.SelectionValue),
 		CompareSelectionMode:  strings.TrimSpace(turn.Workflow.CompareSelectionMode),
 		CompareSelectionValue: strings.TrimSpace(turn.Workflow.CompareSelectionValue),
-		Confidence:     strings.TrimSpace(turn.Confidence),
+		Confidence:            strings.TrimSpace(turn.Confidence),
 	}
 	if decision.SetKind == "" {
 		decision.SetKind = strings.TrimSpace(turn.Reference.RequestedSet)
@@ -80,8 +81,9 @@ func (defaultTurnResolver) ResolveTurn(_ context.Context, request resultSetResol
 	return decision, nil
 }
 
-func (r *groqTurnResolver) ResolveTurn(ctx context.Context, request resultSetResolverRequest) (resultSetResolverDecision, error) {
-	fallback, _ := r.fallback.ResolveTurn(ctx, request)
+func (r *groqTurnResolver) ResolveTurn(ctx context.Context, turn *Turn) (resultSetResolverDecision, error) {
+	request := buildResultSetResolverRequestFromTurn(turn)
+	fallback, _ := r.fallback.ResolveTurn(ctx, turn)
 	if request.Turn.NeedsClarification || request.Turn.Reference.MissingContext || request.Turn.Reference.Ambiguous {
 		return sanitizeResolverDecision(fallback, request, fallback), nil
 	}
@@ -193,6 +195,18 @@ func sanitizeResolverDecision(decision resultSetResolverDecision, request result
 	}
 	if decision.CompareSelectionMode == "item_key" && decision.CompareSelectionValue != "" {
 		decision.CompareSelectionValue = ""
+	}
+	if strings.TrimSpace(request.Turn.Workflow.Action) == "compare" &&
+		(strings.TrimSpace(request.Turn.Workflow.CompareSelectionMode) != "" ||
+			strings.TrimSpace(request.Turn.Workflow.CompareSelectionValue) != "" ||
+			strings.TrimSpace(request.Turn.Reference.Qualifier) != "") {
+		decision.Operation = "compare"
+		if decision.CompareSelectionMode == "" {
+			decision.CompareSelectionMode = strings.TrimSpace(request.Turn.Workflow.CompareSelectionMode)
+		}
+		if decision.CompareSelectionValue == "" {
+			decision.CompareSelectionValue = strings.TrimSpace(request.Turn.Workflow.CompareSelectionValue)
+		}
 	}
 	if decision.Reason == "" {
 		decision.Reason = strings.TrimSpace(fallback.Reason)
@@ -351,19 +365,20 @@ func containsResolverValue(values []string, needle string) bool {
 	return false
 }
 
-func (s *Server) maybeResolveExecutionRequest(ctx context.Context, resolved *resolvedTurnContext) (*resultSetResolverDecision, *serverExecutionRequest) {
-	if s.turnResolver == nil || resolved == nil {
+func (s *Server) maybeResolveExecutionRequest(ctx context.Context, turn *Turn) (*Turn, *resultSetResolverDecision) {
+	if s.turnResolver == nil || turn == nil {
 		return nil, nil
 	}
-	request := buildResultSetResolverRequest(resolved)
-	decision, err := s.turnResolver.ResolveTurn(ctx, request)
+	request := buildResultSetResolverRequestFromTurn(turn)
+	decision, err := s.turnResolver.ResolveTurn(ctx, turn)
 	if err != nil {
 		log.Warn().Err(err).Str("request_id", chatRequestIDFromContext(ctx)).Msg("Chat resolver failed")
 		return nil, nil
 	}
 	decision = sanitizeResolverDecision(decision, request, resultSetResolverDecision{})
-	execReq := buildServerExecutionRequest(resolved, decision)
-	return &decision, &execReq
+	execReq := buildServerExecutionRequestFromTurn(turn, decision)
+	turn = turn.withExecution(turnToExecution(execReq))
+	return turn, &decision
 }
 
 func applyServerExecutionRequest(resolved *resolvedTurnContext, request serverExecutionRequest) *resolvedTurnContext {
@@ -407,16 +422,12 @@ func applyServerExecutionRequest(resolved *resolvedTurnContext, request serverEx
 	return &cloned
 }
 
-func (s *Server) executeServerExecutionRequest(ctx context.Context, history []agent.Message, resolved *resolvedTurnContext, request serverExecutionRequest) (ChatResponse, bool) {
-	execResolved := applyServerExecutionRequest(resolved, request)
-	if execResolved == nil {
-		return ChatResponse{}, false
-	}
+func (s *Server) executeServerExecutionRequest(ctx context.Context, history []agent.Message, turn *Turn) (ChatResponse, bool) {
 	for _, handler := range currentServerExecutionHandlers() {
-		if !handler.CanHandle(request) {
+		if !handler.CanHandle(turn) {
 			continue
 		}
-		if resp, ok := handler.Execute(ctx, s, history, execResolved); ok {
+		if resp, ok := handler.Execute(ctx, s, history, turn); ok {
 			return resp, true
 		}
 	}

@@ -15,12 +15,12 @@ type songPathTrack struct {
 }
 
 type songPathState struct {
-	start       songPathTrack
-	end         songPathTrack
-	path        []songPathTrack
-	maxSteps    int
-	exactSize   bool
-	updatedAt   time.Time
+	start     songPathTrack
+	end       songPathTrack
+	path      []songPathTrack
+	maxSteps  int
+	exactSize bool
+	updatedAt time.Time
 }
 
 type songPathStore struct {
@@ -33,18 +33,7 @@ var lastSongPath = songPathStore{
 }
 
 func setLastSongPath(sessionID string, start, end songPathTrack, path []songPathTrack, maxSteps int, exactSize bool) {
-	copied := make([]songPathTrack, len(path))
-	copy(copied, path)
-	lastSongPath.mu.Lock()
-	lastSongPath.sessions[normalizeChatSessionID(sessionID)] = songPathState{
-		start:     normalizeSongPathTrack(start),
-		end:       normalizeSongPathTrack(end),
-		path:      copied,
-		maxSteps:  maxSteps,
-		exactSize: exactSize,
-		updatedAt: time.Now().UTC(),
-	}
-	lastSongPath.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetSongPath(start, end, path, maxSteps, exactSize)
 }
 
 func getLastSongPath(sessionID string) (songPathState, bool) {
@@ -68,4 +57,11 @@ func normalizeSongPathTrack(track songPathTrack) songPathTrack {
 		AlbumName:  strings.TrimSpace(track.AlbumName),
 		Position:   track.Position,
 	}
+}
+
+func normalizedSongPathTrackKey(track songPathTrack) string {
+	if id := strings.TrimSpace(track.ID); id != "" {
+		return "song_path:" + id
+	}
+	return "song_path:" + normalizeReferenceText(track.Title+" "+track.ArtistName)
 }

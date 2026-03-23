@@ -21,14 +21,7 @@ var lastFocusedResultItem = focusedResultItemStore{
 }
 
 func setLastFocusedResultItem(sessionID, kind, key string) {
-	sessionID = normalizeChatSessionID(sessionID)
-	lastFocusedResultItem.mu.Lock()
-	lastFocusedResultItem.sessions[sessionID] = focusedResultItemState{
-		kind:      kind,
-		key:       key,
-		updatedAt: time.Now().UTC(),
-	}
-	lastFocusedResultItem.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetFocusedResultItem(kind, key)
 }
 
 func getLastFocusedResultItem(sessionID string) (focusedResultItemState, bool) {

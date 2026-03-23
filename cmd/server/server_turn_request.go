@@ -39,10 +39,10 @@ type serverTurnReference struct {
 }
 
 type serverTurnWorkflow struct {
-	Action               string `json:"action,omitempty"`
-	SelectionMode        string `json:"selectionMode,omitempty"`
-	SelectionValue       string `json:"selectionValue,omitempty"`
-	CompareSelectionMode string `json:"compareSelectionMode,omitempty"`
+	Action                string `json:"action,omitempty"`
+	SelectionMode         string `json:"selectionMode,omitempty"`
+	SelectionValue        string `json:"selectionValue,omitempty"`
+	CompareSelectionMode  string `json:"compareSelectionMode,omitempty"`
 	CompareSelectionValue string `json:"compareSelectionValue,omitempty"`
 }
 
@@ -61,56 +61,59 @@ type serverTurnSessionSnapshot struct {
 }
 
 func buildServerTurnRequest(resolved *resolvedTurnContext) serverTurnRequest {
-	if resolved == nil {
+	return buildServerTurnRequestFromTurn(turnFromResolved(resolved))
+}
+
+func buildServerTurnRequestFromTurn(turn *Turn) serverTurnRequest {
+	if turn == nil {
 		return serverTurnRequest{}
 	}
-	ref := resolved.resultReference()
 	return serverTurnRequest{
-		Intent:              strings.TrimSpace(resolved.Turn.Intent),
-		SubIntent:           strings.TrimSpace(resolved.Turn.SubIntent),
-		FollowupMode:        strings.TrimSpace(resolved.Turn.FollowupMode),
-		QueryScope:          strings.TrimSpace(resolved.Turn.QueryScope),
-		TimeWindow:          strings.TrimSpace(resolved.Turn.TimeWindow),
-		Confidence:          strings.TrimSpace(resolved.Turn.Confidence),
-		LibraryOnly:         resolved.Turn.LibraryOnly,
-		NeedsClarification:  resolved.Turn.NeedsClarification,
-		ClarificationFocus:  strings.TrimSpace(resolved.Turn.ClarificationFocus),
-		ClarificationPrompt: strings.TrimSpace(resolved.Turn.ClarificationPrompt),
-		StyleHints:          append([]string(nil), resolved.Turn.StyleHints...),
-		TargetName:          strings.TrimSpace(resolved.Turn.TargetName),
-		ArtistName:          strings.TrimSpace(resolved.Turn.ArtistName),
-		TrackTitle:          strings.TrimSpace(resolved.Turn.TrackTitle),
-		PromptHint:          strings.TrimSpace(resolved.Turn.PromptHint),
+		Intent:              strings.TrimSpace(turn.Normalized.Intent),
+		SubIntent:           strings.TrimSpace(turn.Normalized.SubIntent),
+		FollowupMode:        strings.TrimSpace(turn.Normalized.FollowupMode),
+		QueryScope:          strings.TrimSpace(turn.Normalized.QueryScope),
+		TimeWindow:          strings.TrimSpace(turn.Normalized.TimeWindow),
+		Confidence:          strings.TrimSpace(turn.Normalized.Confidence),
+		LibraryOnly:         turn.Normalized.LibraryOnly,
+		NeedsClarification:  turn.Normalized.NeedsClarification,
+		ClarificationFocus:  strings.TrimSpace(turn.Normalized.ClarificationFocus),
+		ClarificationPrompt: strings.TrimSpace(turn.Normalized.ClarificationPrompt),
+		StyleHints:          append([]string(nil), turn.Normalized.StyleHints...),
+		TargetName:          strings.TrimSpace(turn.Normalized.TargetName),
+		ArtistName:          strings.TrimSpace(turn.Normalized.ArtistName),
+		TrackTitle:          strings.TrimSpace(turn.Normalized.TrackTitle),
+		PromptHint:          strings.TrimSpace(turn.Normalized.PromptHint),
 		Reference: serverTurnReference{
-			Target:          strings.TrimSpace(resolved.Turn.ReferenceTarget),
-			Qualifier:       strings.TrimSpace(resolved.Turn.ReferenceQualifier),
-			RequestedSet:    strings.TrimSpace(ref.SetKind),
-			ResolvedSet:     strings.TrimSpace(ref.ResolvedSetKind),
-			ResolvedSource:  strings.TrimSpace(ref.ResolvedSource),
-			ResolvedItemKey: strings.TrimSpace(ref.ResolvedItemKey),
-			ResolvedItemRef: strings.TrimSpace(ref.ResolvedItemRef),
-			MissingContext:  resolved.MissingReferenceContext,
-			Ambiguous:       resolved.AmbiguousReference,
+			Target:          strings.TrimSpace(turn.Reference.Target),
+			Qualifier:       strings.TrimSpace(turn.Reference.Qualifier),
+			RequestedSet:    strings.TrimSpace(turn.Reference.RequestedSet),
+			ResolvedSet:     strings.TrimSpace(turn.Reference.ResolvedSet),
+			ResolvedSource:  strings.TrimSpace(turn.Reference.ResolvedSource),
+			ResolvedItemKey: strings.TrimSpace(turn.Reference.ResolvedItemKey),
+			ResolvedItemRef: strings.TrimSpace(turn.Reference.ResolvedItemRef),
+			MissingContext:  turn.Reference.MissingContext,
+			Ambiguous:       turn.Reference.Ambiguous,
 		},
 		Workflow: serverTurnWorkflow{
-			Action:                strings.TrimSpace(ref.Action),
-			SelectionMode:         strings.TrimSpace(ref.Selection.Mode),
-			SelectionValue:        strings.TrimSpace(ref.Selection.Value),
-			CompareSelectionMode:  strings.TrimSpace(resolved.Turn.CompareSelectionMode),
-			CompareSelectionValue: strings.TrimSpace(resolved.Turn.CompareSelectionValue),
+			Action:                strings.TrimSpace(turn.Normalized.ResultAction),
+			SelectionMode:         strings.TrimSpace(turn.Normalized.SelectionMode),
+			SelectionValue:        strings.TrimSpace(turn.Normalized.SelectionValue),
+			CompareSelectionMode:  strings.TrimSpace(turn.Normalized.CompareSelectionMode),
+			CompareSelectionValue: strings.TrimSpace(turn.Normalized.CompareSelectionValue),
 		},
 		Session: serverTurnSessionSnapshot{
-			HasCreativeAlbumSet:    resolved.HasCreativeAlbumSet,
-			HasSemanticAlbumSet:    resolved.HasSemanticAlbumSet,
-			HasDiscoveredAlbums:    resolved.HasDiscoveredAlbums,
-			HasCleanupCandidates:   resolved.HasCleanupCandidates,
-			HasBadlyRatedAlbums:    resolved.HasBadlyRatedAlbums,
-			HasRecentListening:     resolved.HasRecentListening,
-			HasPendingPlaylistPlan: resolved.HasPendingPlaylistPlan,
-			HasResolvedScene:       resolved.HasResolvedScene,
-			HasSongPath:            resolved.HasSongPath,
-			HasTrackCandidates:     resolved.HasTrackCandidates,
-			HasArtistCandidates:    resolved.HasArtistCandidates,
+			HasCreativeAlbumSet:    turn.Reference.HasCreativeAlbumSet,
+			HasSemanticAlbumSet:    turn.Reference.HasSemanticAlbumSet,
+			HasDiscoveredAlbums:    turn.Reference.HasDiscoveredAlbums,
+			HasCleanupCandidates:   turn.Reference.HasCleanupCandidates,
+			HasBadlyRatedAlbums:    turn.Reference.HasBadlyRatedAlbums,
+			HasRecentListening:     turn.Reference.HasRecentListening,
+			HasPendingPlaylistPlan: turn.Reference.HasPendingPlaylistPlan,
+			HasResolvedScene:       turn.Reference.HasResolvedScene,
+			HasSongPath:            turn.Reference.HasSongPath,
+			HasTrackCandidates:     turn.Reference.HasTrackCandidates,
+			HasArtistCandidates:    turn.Reference.HasArtistCandidates,
 		},
 	}
 }

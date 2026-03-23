@@ -11,7 +11,7 @@ type referenceState struct {
 	updatedAt time.Time
 }
 
-func resolveStructuredReference(sessionID string, resolved *resolvedTurnContext) {
+func resolveStructuredReference(memory turnSessionMemory, resolved *resolvedTurnContext) {
 	if resolved == nil {
 		return
 	}
@@ -24,12 +24,12 @@ func resolveStructuredReference(sessionID string, resolved *resolvedTurnContext)
 		if referenceKindAvailable(explicitKind, resolved) {
 			resolved.ResolvedReferenceKind = explicitKind
 			resolved.ResolvedReferenceSource = "explicit_kind"
-			resolveFocusedItem(sessionID, turn, resolved)
+			resolveFocusedItem(memory, turn, resolved)
 			return
 		}
 	}
 
-	states := collectEligibleReferenceStates(sessionID, *turn, resolved)
+	states := collectEligibleReferenceStates(memory, *turn, resolved)
 	if len(states) == 0 {
 		return
 	}
@@ -55,11 +55,10 @@ func resolveStructuredReference(sessionID string, resolved *resolvedTurnContext)
 	if strings.TrimSpace(turn.ResultSetKind) == "" || turn.ResultSetKind == "none" {
 		turn.ResultSetKind = states[0].kind
 	}
-	resolveFocusedItem(sessionID, turn, resolved)
+	resolveFocusedItem(memory, turn, resolved)
 }
 
-func collectEligibleReferenceStates(sessionID string, turn normalizedTurn, resolved *resolvedTurnContext) []referenceState {
-	sessionID = normalizeChatSessionID(sessionID)
+func collectEligibleReferenceStates(memory turnSessionMemory, turn normalizedTurn, resolved *resolvedTurnContext) []referenceState {
 	preferred := preferredReferenceKinds(turn)
 	if len(preferred) == 0 {
 		preferred = []string{
@@ -78,7 +77,7 @@ func collectEligibleReferenceStates(sessionID string, turn normalizedTurn, resol
 	}
 	states := make([]referenceState, 0, len(preferred))
 	for _, kind := range preferred {
-		updatedAt, ok := latestReferenceTime(sessionID, kind, resolved)
+		updatedAt, ok := latestReferenceTime(memory, kind, resolved)
 		if !ok {
 			continue
 		}
@@ -108,7 +107,7 @@ func preferredReferenceKinds(turn normalizedTurn) []string {
 			return []string{"creative_albums", "semantic_albums"}
 		}
 	case "track_similarity", "track_description":
-		return []string{"track_candidates"}
+		return []string{"track_candidates", "song_path"}
 	case "song_path_summary":
 		return []string{"song_path"}
 	case "artist_similarity", "artist_starting_album":
@@ -142,77 +141,11 @@ func preferredReferenceKinds(turn normalizedTurn) []string {
 	return nil
 }
 
-func latestReferenceTime(sessionID, kind string, resolved *resolvedTurnContext) (time.Time, bool) {
-	switch strings.TrimSpace(kind) {
-	case "creative_albums":
-		if !resolved.HasCreativeAlbumSet {
-			return time.Time{}, false
-		}
-		_, updatedAt, _, _ := getLastCreativeAlbumSet(sessionID)
-		return updatedAt, !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextCreativeAlbumTTL
-	case "semantic_albums":
-		if !resolved.HasSemanticAlbumSet {
-			return time.Time{}, false
-		}
-		_, updatedAt, _ := getLastSemanticAlbumSearch(sessionID)
-		return updatedAt, !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextSemanticAlbumTTL
-	case "discovered_albums":
-		if !resolved.HasDiscoveredAlbums {
-			return time.Time{}, false
-		}
-		_, updatedAt, _ := getLastDiscoveredAlbums(sessionID)
-		return updatedAt, !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextDiscoveredAlbumsTTL
-	case "cleanup_candidates":
-		if !resolved.HasCleanupCandidates {
-			return time.Time{}, false
-		}
-		_, updatedAt := getLastLidarrCandidates(sessionID)
-		return updatedAt, !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextCleanupTTL
-	case "badly_rated_albums":
-		if !resolved.HasBadlyRatedAlbums {
-			return time.Time{}, false
-		}
-		_, updatedAt := getLastBadlyRatedAlbums(sessionID)
-		return updatedAt, !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextBadlyRatedAlbumsTTL
-	case "playlist_candidates":
-		if !resolved.HasPendingPlaylistPlan {
-			return time.Time{}, false
-		}
-		_, _, updatedAt, candidates := getLastPlannedPlaylist(sessionID)
-		return updatedAt, len(candidates) > 0 && !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextPlaylistTTL
-	case "recent_listening":
-		if !resolved.HasRecentListening {
-			return time.Time{}, false
-		}
-		state, ok := getLastRecentListeningSummary(sessionID)
-		return state.updatedAt, ok && !state.updatedAt.IsZero() && time.Since(state.updatedAt) <= llmContextRecentListeningTTL
-	case "scene_candidates":
-		if !resolved.HasResolvedScene {
-			return time.Time{}, false
-		}
-		state, ok := getLastSceneSelection(sessionID)
-		return state.UpdatedAt, ok && !state.UpdatedAt.IsZero() && time.Since(state.UpdatedAt) <= llmContextSceneTTL
-	case "song_path":
-		if !resolved.HasSongPath {
-			return time.Time{}, false
-		}
-		state, ok := getLastSongPath(sessionID)
-		return state.updatedAt, ok && !state.updatedAt.IsZero() && time.Since(state.updatedAt) <= llmContextSongPathTTL
-	case "track_candidates":
-		if !resolved.HasTrackCandidates {
-			return time.Time{}, false
-		}
-		_, updatedAt, _, _ := getLastTrackCandidateSet(sessionID)
-		return updatedAt, !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextRecentListeningTTL
-	case "artist_candidates":
-		if !resolved.HasArtistCandidates {
-			return time.Time{}, false
-		}
-		_, updatedAt, _ := getLastArtistCandidateSet(sessionID)
-		return updatedAt, !updatedAt.IsZero() && time.Since(updatedAt) <= llmContextRecentListeningTTL
-	default:
+func latestReferenceTime(memory turnSessionMemory, kind string, resolved *resolvedTurnContext) (time.Time, bool) {
+	if !referenceKindAvailable(kind, resolved) {
 		return time.Time{}, false
 	}
+	return memory.LatestReferenceTime(kind)
 }
 
 func shouldClarifyAmbiguousReference(turn normalizedTurn, states []referenceState) bool {
@@ -261,53 +194,24 @@ func referenceKindAvailable(kind string, resolved *resolvedTurnContext) bool {
 	}
 }
 
-func resolveFocusedItem(sessionID string, turn *normalizedTurn, resolved *resolvedTurnContext) {
+func resolveFocusedItem(memory turnSessionMemory, turn *normalizedTurn, resolved *resolvedTurnContext) {
 	if turn == nil || resolved == nil {
 		return
 	}
 	if strings.TrimSpace(turn.ReferenceQualifier) != "last_item" {
 		return
 	}
-	state, ok := getLastFocusedResultItem(sessionID)
-	if !ok || state.updatedAt.IsZero() {
-		return
-	}
 	if strings.TrimSpace(resolved.ResolvedReferenceKind) == "" {
 		return
 	}
-	if state.kind != resolved.ResolvedReferenceKind {
+	key, ok := memory.ResolveFocusedItem(resolved.ResolvedReferenceKind)
+	if !ok {
 		return
 	}
-	if ttl := focusedResultItemTTL(state.kind); ttl > 0 && time.Since(state.updatedAt) > ttl {
-		return
-	}
-	resolved.ResolvedItemKey = state.key
+	resolved.ResolvedItemKey = key
 	resolved.ResolvedItemSource = "focused_item"
 }
 
 func focusedResultItemTTL(kind string) time.Duration {
-	switch strings.TrimSpace(kind) {
-	case "creative_albums":
-		return llmContextCreativeAlbumTTL
-	case "semantic_albums":
-		return llmContextSemanticAlbumTTL
-	case "discovered_albums":
-		return llmContextDiscoveredAlbumsTTL
-	case "cleanup_candidates":
-		return llmContextCleanupTTL
-	case "badly_rated_albums":
-		return llmContextBadlyRatedAlbumsTTL
-	case "playlist_candidates":
-		return llmContextPlaylistTTL
-	case "recent_listening":
-		return llmContextRecentListeningTTL
-	case "scene_candidates":
-		return llmContextSceneTTL
-	case "track_candidates":
-		return llmContextRecentListeningTTL
-	case "artist_candidates":
-		return llmContextRecentListeningTTL
-	default:
-		return 0
-	}
+	return referenceKindTTL(kind)
 }

@@ -34,6 +34,10 @@ func (s *Server) handleStructuredSceneOverview(ctx context.Context, resolved *re
 	return renderStructuredSceneOverview(raw)
 }
 
+func (s *Server) handleStructuredSceneOverviewTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredSceneOverview(ctx, turnToResolvedTurnContext(turn))
+}
+
 func renderStructuredSceneOverview(raw string) (string, bool) {
 	var payload struct {
 		Data struct {
@@ -122,16 +126,21 @@ func (s *Server) handleStructuredSceneSelection(ctx context.Context, resolved *r
 	return renderStructuredSceneSelection(outcome)
 }
 
+func (s *Server) handleStructuredSceneSelectionTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredSceneSelection(ctx, turnToResolvedTurnContext(turn))
+}
+
 func sceneExecutionHandlers() []serverExecutionHandler {
 	return []serverExecutionHandler{
 		{
 			name: "scene_select",
-			canHandle: func(request serverExecutionRequest) bool {
+			canHandle: func(turn *Turn) bool {
+				request := executionRequestFromTurn(turn)
 				return strings.TrimSpace(request.SetKind) == "scene_candidates" &&
 					strings.TrimSpace(request.Operation) == "select_candidate"
 			},
-			execute: func(ctx context.Context, s *Server, _ []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
-				outcome, ok := s.resolveStructuredSceneSelectionOutcome(ctx, resolved)
+			executeWithTurn: func(ctx context.Context, s *Server, _ []agent.Message, turn *Turn) (ChatResponse, bool) {
+				outcome, ok := s.resolveStructuredSceneSelectionOutcome(ctx, turnToResolvedTurnContext(turn))
 				if !ok {
 					return ChatResponse{}, false
 				}

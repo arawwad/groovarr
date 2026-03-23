@@ -33,7 +33,7 @@ type stubTurnPlanner struct {
 	lastMsg     string
 	lastHistory []agent.Message
 	lastContext string
-	lastTurn    *resolvedTurnContext
+	lastTurn    *Turn
 }
 
 func testChatContext(sessionID, requestID string) context.Context {
@@ -64,27 +64,33 @@ func (s *stubTurnNormalizer) NormalizeTurn(_ context.Context, msg string, histor
 	return s.turn, s.err
 }
 
-func (s *stubTurnPlanner) PlanTurn(_ context.Context, msg string, history []agent.Message, resolved *resolvedTurnContext, sessionContext string) (orchestrationDecision, error) {
-	s.lastMsg = msg
-	s.lastHistory = append([]agent.Message(nil), history...)
-	s.lastContext = sessionContext
-	if resolved != nil {
-		copied := *resolved
+func (s *stubTurnPlanner) PlanTurn(_ context.Context, turn *Turn, history []agent.Message, sessionContext string) (orchestrationDecision, error) {
+	if turn != nil {
+		copied := *turn
 		s.lastTurn = &copied
+		s.lastMsg = turn.UserMessage
 	} else {
 		s.lastTurn = nil
+		s.lastMsg = ""
 	}
+	s.lastHistory = append([]agent.Message(nil), history...)
+	s.lastContext = sessionContext
 	return s.plan, s.err
 }
 
 type stubTurnResolver struct {
-	decision    resultSetResolverDecision
-	err         error
-	lastRequest resultSetResolverRequest
+	decision resultSetResolverDecision
+	err      error
+	lastTurn *Turn
 }
 
-func (s *stubTurnResolver) ResolveTurn(_ context.Context, request resultSetResolverRequest) (resultSetResolverDecision, error) {
-	s.lastRequest = request
+func (s *stubTurnResolver) ResolveTurn(_ context.Context, turn *Turn) (resultSetResolverDecision, error) {
+	if turn != nil {
+		copied := *turn
+		s.lastTurn = &copied
+	} else {
+		s.lastTurn = nil
+	}
 	return s.decision, s.err
 }
 
@@ -402,6 +408,13 @@ func TestBuildChatResponseUsesResolverClarificationBeforeAgent(t *testing.T) {
 		approvals:     make(map[string]*pendingActionState),
 		latestPending: make(map[string]string),
 	}
+
+	setLastDiscoveredAlbums("sess-resolver-clarify", "dream pop", []discoveredAlbumCandidate{
+		{ArtistName: "Slowdive", AlbumTitle: "Souvlaki"},
+	})
+	setLastLidarrCandidates("sess-resolver-clarify", []lidarrCleanupCandidate{
+		{AlbumID: 1, ArtistName: "The National", Title: "Sleep Well Beast"},
+	})
 
 	ctx := testChatContext("sess-resolver-clarify", "req-resolver-clarify")
 	resp, err := srv.buildChatResponse(ctx, "Apply that one.", nil, "")
@@ -962,5 +975,45 @@ func TestBuildChatResponseIncludesSemanticAlbumSessionContextForReferentialFollo
 	}
 	if !foundSemanticContext {
 		t.Fatalf("agent history missing semantic session context: %#v", agentStub.lastHistory)
+	}
+}
+
+func TestBuildChatResponseFallsBackToAgentForReferentialFollowUpWithExplicitHistory(t *testing.T) {
+	agentStub := &stubChatAgent{response: "agent follow-up handled"}
+	normalizerStub := &stubTurnNormalizer{
+		turn: normalizedTurn{
+			Intent:          "listening",
+			SubIntent:       "listening_summary",
+			FollowupMode:    "query_previous_set",
+			QueryScope:      "library",
+			ReferenceTarget: "previous_results",
+			SelectionMode:   "top_n",
+			SelectionValue:  "3",
+			Confidence:      "high",
+		},
+	}
+	srv := &Server{
+		agent:         agentStub,
+		normalizer:    normalizerStub,
+		chatMemory:    make(map[string]chatSessionMemory),
+		approvals:     make(map[string]*pendingActionState),
+		latestPending: make(map[string]string),
+	}
+
+	history := []agent.Message{
+		{Role: "user", Content: "What are my top artists from the last month?"},
+		{Role: "assistant", Content: "Top artists in this window:\n- Radiohead\n- Pink Floyd"},
+	}
+
+	ctx := testChatContext("sess-explicit-history-followup", "req-explicit-history-followup")
+	resp, err := srv.buildChatResponse(ctx, "From those, give me three albums to revisit today.", history, "")
+	if err != nil {
+		t.Fatalf("buildChatResponse() error = %v", err)
+	}
+	if resp.Response != "agent follow-up handled" {
+		t.Fatalf("response = %q, want agent fallback", resp.Response)
+	}
+	if agentStub.lastMsg == "" {
+		t.Fatal("expected agent to be called")
 	}
 }

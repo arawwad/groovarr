@@ -1666,12 +1666,14 @@ func handlePlaylistPlanDetailsTool(ctx context.Context, _ toolRuntime, args map[
 		return toolResult{}, err
 	}
 	sessionID := chatSessionIDFromContext(ctx)
-	prompt, playlistName, plannedAt, candidates := getLastPlannedPlaylist(sessionID)
+	prompt, playlistName, plannedAt, candidates, resolvedAt, resolved, ok := loadTurnSessionMemory(sessionID).PlaylistContext()
+	if !ok {
+		return toolResult{}, fmt.Errorf("no playlist plan available")
+	}
 	selected, err := selectPlaylistCandidates(candidates, toolStringArg(args, "selection"))
 	if err != nil {
 		return toolResult{}, err
 	}
-	resolvedAt, resolved := getLastResolvedPlaylist(sessionID)
 	resolvedByKey := make(map[string]resolvedPlaylistTrack, len(resolved))
 	for _, item := range resolved {
 		key := plannedPlaylistTrackKey(item.Rank, item.ArtistName, item.TrackTitle)

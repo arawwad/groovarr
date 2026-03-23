@@ -60,7 +60,7 @@ func (s *sceneSelectionStore) Get(sessionID string) (sceneSessionState, bool) {
 }
 
 func setLastSceneSelection(sessionID string, resolved *sceneSessionItem, candidates []sceneSessionItem) {
-	lastSceneSelection.Set(sessionID, resolved, candidates)
+	newTurnSessionMemoryWriter(sessionID).SetSceneSelection(resolved, candidates)
 }
 
 func getLastSceneSelection(sessionID string) (sceneSessionState, bool) {

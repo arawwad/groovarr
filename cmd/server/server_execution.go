@@ -7,20 +7,32 @@ import (
 )
 
 type serverExecutionHandler struct {
-	name      string
-	canHandle func(serverExecutionRequest) bool
-	execute   func(context.Context, *Server, []agent.Message, *resolvedTurnContext) (ChatResponse, bool)
+	name            string
+	canHandle       func(*Turn) bool
+	execute         func(context.Context, *Server, []agent.Message, *resolvedTurnContext) (ChatResponse, bool)
+	executeWithTurn func(context.Context, *Server, []agent.Message, *Turn) (ChatResponse, bool)
 }
 
-func (h serverExecutionHandler) CanHandle(request serverExecutionRequest) bool {
-	return h.canHandle != nil && h.canHandle(request)
+func (h serverExecutionHandler) CanHandle(turn *Turn) bool {
+	return h.canHandle != nil && h.canHandle(turn)
 }
 
-func (h serverExecutionHandler) Execute(ctx context.Context, s *Server, history []agent.Message, resolved *resolvedTurnContext) (ChatResponse, bool) {
+func (h serverExecutionHandler) Execute(ctx context.Context, s *Server, history []agent.Message, turn *Turn) (ChatResponse, bool) {
+	if h.executeWithTurn != nil {
+		return h.executeWithTurn(ctx, s, history, turn)
+	}
 	if h.execute == nil {
 		return ChatResponse{}, false
 	}
+	resolved := executionResolvedTurnContext(turn)
+	if resolved == nil {
+		return ChatResponse{}, false
+	}
 	return h.execute(ctx, s, history, resolved)
+}
+
+func executionResolvedTurnContext(turn *Turn) *resolvedTurnContext {
+	return applyServerExecutionRequest(turnToResolvedTurnContext(turn), executionRequestFromTurn(turn))
 }
 
 func currentServerExecutionHandlers() []serverExecutionHandler {

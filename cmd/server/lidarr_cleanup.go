@@ -351,15 +351,7 @@ func applyLidarrCleanup(ctx context.Context, c *lidarrClient, args map[string]in
 }
 
 func setLastLidarrCandidates(sessionID string, candidates []lidarrCleanupCandidate) {
-	cloned := make([]lidarrCleanupCandidate, len(candidates))
-	copy(cloned, candidates)
-
-	lastLidarrCandidates.mu.Lock()
-	lastLidarrCandidates.sessions[normalizeChatSessionID(sessionID)] = lidarrCleanupState{
-		candidates: cloned,
-		updatedAt:  time.Now().UTC(),
-	}
-	lastLidarrCandidates.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetCleanupCandidates(candidates)
 }
 
 func getLastLidarrCandidates(sessionID string) ([]lidarrCleanupCandidate, time.Time) {
@@ -384,8 +376,8 @@ func resolveAlbumIDsForApply(ctx context.Context, args map[string]interface{}) (
 		return nil, fmt.Errorf("albumIds or selection is required")
 	}
 
-	candidates, updatedAt := getLastLidarrCandidates(chatSessionIDFromContext(ctx))
-	if len(candidates) == 0 {
+	candidates, updatedAt, ok := loadTurnSessionMemory(chatSessionIDFromContext(ctx)).CleanupCandidates()
+	if !ok || len(candidates) == 0 {
 		return nil, fmt.Errorf("no cached cleanup candidates available; run lidarrCleanupCandidates first")
 	}
 	if time.Since(updatedAt) > 20*time.Minute {

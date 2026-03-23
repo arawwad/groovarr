@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"sync"
 	"time"
 )
@@ -40,20 +39,7 @@ var lastRecentListening = recentListeningStore{
 }
 
 func setLastRecentListeningSummary(sessionID string, state recentListeningState) {
-	state.updatedAt = time.Now().UTC()
-	state.windowStart = strings.TrimSpace(state.windowStart)
-	state.windowEnd = strings.TrimSpace(state.windowEnd)
-
-	artists := make([]recentListeningArtistState, len(state.topArtists))
-	copy(artists, state.topArtists)
-	tracks := make([]recentListeningTrackState, len(state.topTracks))
-	copy(tracks, state.topTracks)
-	state.topArtists = artists
-	state.topTracks = tracks
-
-	lastRecentListening.mu.Lock()
-	lastRecentListening.sessions[normalizeChatSessionID(sessionID)] = state
-	lastRecentListening.mu.Unlock()
+	newTurnSessionMemoryWriter(sessionID).SetRecentListeningSummary(state)
 }
 
 func getLastRecentListeningSummary(sessionID string) (recentListeningState, bool) {

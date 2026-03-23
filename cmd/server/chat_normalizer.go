@@ -194,8 +194,10 @@ Rules:
   - "Take the safer one and tell me what it sounds like." -> intent=track_discovery, subIntent=track_description, followupMode=refine_previous, referenceTarget=previous_results, referenceQualifier=safer, resultSetKind=track_candidates.
   - "Take the less expected one and show me a strong starting record I already own." -> intent=artist_discovery, subIntent=artist_starting_album, followupMode=refine_previous, queryScope=library, libraryOnly=true, referenceTarget=previous_results, referenceQualifier=riskier, resultSetKind=artist_candidates.
   - "Take the safer one and show me a starting record I own." -> intent=artist_discovery, subIntent=artist_starting_album, followupMode=refine_previous, queryScope=library, libraryOnly=true, referenceTarget=previous_results, referenceQualifier=safer, resultSetKind=artist_candidates.
+  - "Take the second one and tell me what it sounds like." after prior track results -> intent=track_discovery, subIntent=track_description, followupMode=refine_previous, referenceTarget=previous_results, resultSetKind=track_candidates, selectionMode=ordinal, selectionValue="2".
   - "Compare the safer one to the first." after prior track results -> intent=track_discovery, resultAction=compare, followupMode=refine_previous, referenceTarget=previous_results, referenceQualifier=safer, resultSetKind=track_candidates, compareSelectionMode=ordinal, compareSelectionValue="1".
   - "Compare the less expected one to the first." after prior artist results -> intent=artist_discovery, resultAction=compare, followupMode=refine_previous, referenceTarget=previous_results, referenceQualifier=riskier, resultSetKind=artist_candidates, compareSelectionMode=ordinal, compareSelectionValue="1".
+  - "Use the middle point from that path and find neighbors." -> intent=track_discovery, subIntent=track_similarity, followupMode=refine_previous, referenceTarget=previous_results, referenceQualifier=last_item, resultSetKind=song_path.
 - Use resultSetKind=discovered_albums when a follow-up is about the last discovered album list in this chat.
 - If resultSetKind=discovered_albums, use intent=album_discovery.
 - Use resultSetKind=scene_candidates when the user is choosing among previously listed sonic scenes.
@@ -282,11 +284,42 @@ func (s *Server) normalizeResolvedTurn(ctx context.Context, sessionID, msg strin
 		return nil, err
 	}
 	resolved := resolveTurnContext(sessionID, sanitizeNormalizedTurn(msg, turn))
+	if shouldDeferMissingReferenceClarification(resolved, history) {
+		resolved = clearMissingReferenceClarification(resolved)
+	}
 	if retry, ok := s.retryReferenceRecovery(ctx, msg, history, sessionContext, resolved); ok {
 		resolved = retry
 	}
 	setLastNormalizedTurn(sessionID, resolved.Turn)
 	return &resolved, nil
+}
+
+func shouldDeferMissingReferenceClarification(resolved resolvedTurnContext, history []agent.Message) bool {
+	if !resolved.MissingReferenceContext || strings.TrimSpace(resolved.Turn.FollowupMode) == "none" {
+		return false
+	}
+	hasUser := false
+	hasAssistant := false
+	for _, msg := range history {
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(msg.Role)) {
+		case "user":
+			hasUser = true
+		case "assistant":
+			hasAssistant = true
+		}
+	}
+	return hasUser && hasAssistant
+}
+
+func clearMissingReferenceClarification(resolved resolvedTurnContext) resolvedTurnContext {
+	resolved.MissingReferenceContext = false
+	resolved.Turn.NeedsClarification = false
+	resolved.Turn.ClarificationFocus = "none"
+	resolved.Turn.ClarificationPrompt = ""
+	return resolved
 }
 
 func (s *Server) retryReferenceRecovery(ctx context.Context, msg string, history []agent.Message, sessionContext string, resolved resolvedTurnContext) (resolvedTurnContext, bool) {
@@ -486,6 +519,17 @@ func sanitizeNormalizedTurn(msg string, turn normalizedTurn) normalizedTurn {
 			turn.SubIntent = "track_description"
 		}
 	}
+	if turn.TimeWindow == "none" && messageImpliesRecentWindow(msg) {
+		switch {
+		case turn.SubIntent == "result_set_play_recency":
+			turn.TimeWindow = "last_month"
+		case turn.Intent == "listening" && turn.FollowupMode == "query_previous_set" && turn.ReferenceTarget == "previous_results":
+			turn.TimeWindow = "last_month"
+			if turn.SubIntent == "" {
+				turn.SubIntent = "result_set_play_recency"
+			}
+		}
+	}
 	if turn.SubIntent == "compare" && turn.ResultAction == "none" {
 		turn.ResultAction = "compare"
 		turn.SubIntent = ""
@@ -550,6 +594,20 @@ func sanitizeNormalizedTurn(msg string, turn normalizedTurn) normalizedTurn {
 	return turn
 }
 
+func messageImpliesRecentWindow(msg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, "most recently") || strings.Contains(lower, "most recent") {
+		return false
+	}
+	return strings.Contains(lower, "recently") ||
+		strings.Contains(lower, "lately") ||
+		strings.Contains(lower, "these days") ||
+		strings.Contains(lower, "of late")
+}
+
 func inferDefaultQueryScope(turn *normalizedTurn) {
 	if turn == nil || turn.QueryScope != "unknown" {
 		return
@@ -575,39 +633,8 @@ func inferDefaultQueryScope(turn *normalizedTurn) {
 func resolveTurnContext(sessionID string, turn normalizedTurn) resolvedTurnContext {
 	sessionID = normalizeChatSessionID(sessionID)
 	resolved := resolvedTurnContext{Turn: turn}
-	if candidates, _, _, _ := getLastCreativeAlbumSet(sessionID); len(candidates) > 0 {
-		resolved.HasCreativeAlbumSet = true
-	}
-	if matches, _, _ := getLastSemanticAlbumSearch(sessionID); len(matches) > 0 {
-		resolved.HasSemanticAlbumSet = true
-	}
-	if candidates, _, _ := getLastDiscoveredAlbums(sessionID); len(candidates) > 0 {
-		resolved.HasDiscoveredAlbums = true
-	}
-	if candidates, _ := getLastLidarrCandidates(sessionID); len(candidates) > 0 {
-		resolved.HasCleanupCandidates = true
-	}
-	if candidates, _ := getLastBadlyRatedAlbums(sessionID); len(candidates) > 0 {
-		resolved.HasBadlyRatedAlbums = true
-	}
-	if _, ok := getLastRecentListeningSummary(sessionID); ok {
-		resolved.HasRecentListening = true
-	}
-	if _, _, _, candidates := getLastPlannedPlaylist(sessionID); len(candidates) > 0 {
-		resolved.HasPendingPlaylistPlan = true
-	}
-	if sceneState, ok := getLastSceneSelection(sessionID); ok && (sceneState.Resolved != nil || len(sceneState.Candidates) > 0) {
-		resolved.HasResolvedScene = true
-	}
-	if state, ok := getLastSongPath(sessionID); ok && len(state.path) > 0 {
-		resolved.HasSongPath = true
-	}
-	if candidates, _, _, _ := getLastTrackCandidateSet(sessionID); len(candidates) > 0 {
-		resolved.HasTrackCandidates = true
-	}
-	if candidates, _, _ := getLastArtistCandidateSet(sessionID); len(candidates) > 0 {
-		resolved.HasArtistCandidates = true
-	}
+	memory := loadTurnSessionMemory(sessionID)
+	memory.applyToResolvedTurnContext(&resolved)
 	if resolved.Turn.Intent == "album_discovery" && resolved.Turn.ResultAction != "" && resolved.Turn.ResultAction != "none" && (resolved.Turn.ResultSetKind == "" || resolved.Turn.ResultSetKind == "none") && resolved.HasDiscoveredAlbums {
 		resolved.Turn.ResultSetKind = "discovered_albums"
 	}
@@ -681,7 +708,7 @@ func resolveTurnContext(sessionID string, turn normalizedTurn) resolvedTurnConte
 			resolved.Turn.ResultSetKind = "artist_candidates"
 		}
 	}
-	resolveStructuredReference(sessionID, &resolved)
+	resolveStructuredReference(memory, &resolved)
 	if resolved.Turn.ClarificationFocus == "reference" && resolved.Turn.ReferenceTarget == "previous_results" &&
 		!resolved.MissingReferenceContext && !resolved.AmbiguousReference && resolved.ResolvedReferenceKind != "" {
 		resolved.Turn.NeedsClarification = false
