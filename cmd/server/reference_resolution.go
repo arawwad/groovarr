@@ -52,7 +52,7 @@ func resolveStructuredReference(memory turnSessionMemory, resolved *resolvedTurn
 
 	resolved.ResolvedReferenceKind = states[0].kind
 	resolved.ResolvedReferenceSource = "resolver"
-	if strings.TrimSpace(turn.ResultSetKind) == "" || turn.ResultSetKind == "none" {
+	if strings.TrimSpace(turn.ResultSetKind) == "" || turn.ResultSetKind == "none" || !referenceKindAvailable(turn.ResultSetKind, resolved) {
 		turn.ResultSetKind = states[0].kind
 	}
 	resolveFocusedItem(memory, turn, resolved)
@@ -75,8 +75,21 @@ func collectEligibleReferenceStates(memory turnSessionMemory, turn normalizedTur
 			"artist_candidates",
 		}
 	}
-	states := make([]referenceState, 0, len(preferred))
-	for _, kind := range preferred {
+	states := collectReferenceStatesForKinds(memory, preferred, resolved)
+	if len(states) == 0 && turn.ReferenceTarget == "previous_results" && strings.TrimSpace(turn.ResultSetKind) != "" && turn.ResultSetKind != "none" {
+		fallbackTurn := turn
+		fallbackTurn.ResultSetKind = ""
+		fallbackPreferred := preferredReferenceKinds(fallbackTurn)
+		if len(fallbackPreferred) > 0 {
+			states = collectReferenceStatesForKinds(memory, fallbackPreferred, resolved)
+		}
+	}
+	return states
+}
+
+func collectReferenceStatesForKinds(memory turnSessionMemory, kinds []string, resolved *resolvedTurnContext) []referenceState {
+	states := make([]referenceState, 0, len(kinds))
+	for _, kind := range kinds {
 		updatedAt, ok := latestReferenceTime(memory, kind, resolved)
 		if !ok {
 			continue
@@ -113,7 +126,7 @@ func preferredReferenceKinds(turn normalizedTurn) []string {
 	case "artist_similarity", "artist_starting_album":
 		return []string{"artist_candidates"}
 	case "creative_refinement", "result_set_most_recent", "result_set_play_recency":
-		return []string{"creative_albums", "semantic_albums"}
+		return []string{"creative_albums", "semantic_albums", "artist_candidates"}
 	case "listening_interpretation", "artist_dominance":
 		return []string{"recent_listening"}
 	case "lidarr_cleanup_apply":
@@ -127,7 +140,7 @@ func preferredReferenceKinds(turn normalizedTurn) []string {
 	if turn.FollowupMode != "none" && turn.ReferenceTarget == "previous_results" {
 		switch turn.Intent {
 		case "album_discovery", "listening":
-			return []string{"creative_albums", "semantic_albums", "discovered_albums"}
+			return []string{"creative_albums", "semantic_albums", "discovered_albums", "artist_candidates"}
 		case "track_discovery":
 			return []string{"track_candidates"}
 		case "artist_discovery":
@@ -158,11 +171,24 @@ func shouldClarifyAmbiguousReference(turn normalizedTurn, states []referenceStat
 	if strings.TrimSpace(turn.ReferenceTarget) == "previous_playlist" || strings.TrimSpace(turn.ReferenceTarget) == "previous_stats" {
 		return false
 	}
+	if equivalentReferenceKinds(states[0].kind, states[1].kind) {
+		return false
+	}
 	delta := states[0].updatedAt.Sub(states[1].updatedAt)
 	if delta < 0 {
 		delta = -delta
 	}
 	return states[0].kind != states[1].kind && delta <= 2*time.Second
+}
+
+func equivalentReferenceKinds(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == right {
+		return true
+	}
+	return (left == "creative_albums" && right == "semantic_albums") ||
+		(left == "semantic_albums" && right == "creative_albums")
 }
 
 func referenceKindAvailable(kind string, resolved *resolvedTurnContext) bool {

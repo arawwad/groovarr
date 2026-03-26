@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,6 +14,12 @@ import (
 type artistAlbumStat struct {
 	ArtistName string
 	AlbumCount int
+}
+
+type artistListeningStatItem struct {
+	ArtistName    string `json:"artistName"`
+	AlbumCount    int    `json:"albumCount"`
+	PlaysInWindow int    `json:"playsInWindow"`
 }
 
 func (s *Server) handleArtistAlbumCount(ctx context.Context, rawMsg string) (string, bool) {
@@ -106,16 +113,14 @@ func (s *Server) handleArtistListeningStatsQuery(ctx context.Context, lowerMsg s
 
 	var parsed struct {
 		Data struct {
-			Items []struct {
-				ArtistName    string `json:"artistName"`
-				AlbumCount    int    `json:"albumCount"`
-				PlaysInWindow int    `json:"playsInWindow"`
-			} `json:"artistListeningStats"`
+			Items []artistListeningStatItem `json:"artistListeningStats"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil || len(parsed.Data.Items) == 0 {
 		return "", false
 	}
+
+	rememberArtistListeningStats(chatSessionIDFromContext(ctx), lowerMsg, parsed.Data.Items)
 
 	items := make([]string, 0, len(parsed.Data.Items))
 	for _, item := range parsed.Data.Items {
@@ -128,6 +133,64 @@ func (s *Server) handleArtistListeningStatsQuery(ctx context.Context, lowerMsg s
 		return "", false
 	}
 	return renderRouteBulletList(label, items, 8), true
+}
+
+func rememberArtistListeningStats(sessionID, queryText string, items []artistListeningStatItem) {
+	candidates := make([]artistCandidate, 0, len(items))
+	for _, item := range items {
+		name := strings.TrimSpace(item.ArtistName)
+		if name == "" {
+			continue
+		}
+		candidates = append(candidates, artistCandidate{
+			Name:      name,
+			PlayCount: item.PlaysInWindow,
+			Score:     float64(item.AlbumCount),
+		})
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	rememberArtistCandidateStats(sessionID, queryText, candidates, "listening_stats")
+}
+
+func rememberArtistLibraryStats(sessionID, queryText string, items []artistAlbumStat) {
+	candidates := make([]artistCandidate, 0, len(items))
+	for _, item := range items {
+		name := strings.TrimSpace(item.ArtistName)
+		if name == "" {
+			continue
+		}
+		candidates = append(candidates, artistCandidate{
+			Name:  name,
+			Score: float64(item.AlbumCount),
+		})
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	rememberArtistCandidateStats(sessionID, queryText, candidates, "library_stats")
+}
+
+func rememberArtistCandidateStats(sessionID, queryText string, candidates []artistCandidate, focusStatus string) {
+	setLastArtistCandidateSet(sessionID, queryText, candidates)
+	turn := normalizedTurn{
+		Intent:     "stats",
+		SubIntent:  "library_top_artists",
+		PromptHint: strings.TrimSpace(queryText),
+	}
+	switch strings.TrimSpace(focusStatus) {
+	case "listening_stats":
+		turn.QueryScope = "listening"
+	case "library_stats":
+		turn.QueryScope = "library"
+	default:
+		turn.QueryScope = "stats"
+	}
+	setLastActiveFocusFromTurn(sessionID, "artist_candidates", focusStatus, turn)
+	if len(candidates) == 1 {
+		setLastFocusedResultItem(sessionID, "artist_candidates", normalizedArtistCandidateKey(candidates[0]))
+	}
 }
 
 func (s *Server) handleLibraryFacetQuery(ctx context.Context, lowerMsg string) (string, bool) {
@@ -192,16 +255,80 @@ func (s *Server) tryNormalizedTopLibraryArtists(ctx context.Context, turn normal
 	}
 
 	items := make([]string, 0, len(parsed.Data.Items))
+	stats := make([]artistAlbumStat, 0, len(parsed.Data.Items))
 	for _, item := range parsed.Data.Items {
 		if strings.TrimSpace(item.ArtistName) == "" {
 			continue
 		}
+		stats = append(stats, artistAlbumStat{
+			ArtistName: strings.TrimSpace(item.ArtistName),
+			AlbumCount: item.AlbumCount,
+		})
 		items = append(items, fmt.Sprintf("%s (%d albums)", item.ArtistName, item.AlbumCount))
 	}
 	if len(items) == 0 {
 		return "", false
 	}
+	rememberArtistLibraryStats(chatSessionIDFromContext(ctx), turn.RawMessage, stats)
 	return renderRouteBulletList("Artists with the biggest footprint in your library", items, 8), true
+}
+
+func (s *Server) handleStructuredArtistCatalogDepthTurn(ctx context.Context, turn *Turn) (string, bool) {
+	resolved := turnToResolvedTurnContext(turn)
+	if resolved == nil {
+		return "", false
+	}
+	if strings.TrimSpace(resolved.Turn.SubIntent) != "artist_catalog_depth" &&
+		!(strings.TrimSpace(resolved.Turn.ResultSetKind) == "artist_candidates" &&
+			strings.TrimSpace(resolved.Turn.ConversationOp) == "inspect") {
+		return "", false
+	}
+	candidates, _, ok := artistCandidatesFromResolvedReference(chatSessionIDFromContext(ctx), resolved)
+	if !ok || len(candidates) == 0 {
+		return "", false
+	}
+
+	var best artistCandidate
+	var runnerUp artistCandidate
+	bestCount := -1
+	runnerUpCount := -1
+	tied := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		albumCount := int(math.Round(candidate.Score))
+		if albumCount <= 0 {
+			continue
+		}
+		if albumCount > bestCount {
+			if bestCount > 0 {
+				runnerUp = best
+				runnerUpCount = bestCount
+			}
+			best = candidate
+			bestCount = albumCount
+			tied = []string{strings.TrimSpace(candidate.Name)}
+			continue
+		}
+		if albumCount == bestCount {
+			tied = append(tied, strings.TrimSpace(candidate.Name))
+			continue
+		}
+		if albumCount > runnerUpCount {
+			runnerUp = candidate
+			runnerUpCount = albumCount
+		}
+	}
+	if bestCount <= 0 || strings.TrimSpace(best.Name) == "" {
+		return "", false
+	}
+
+	setLastFocusedResultItem(chatSessionIDFromContext(ctx), "artist_candidates", normalizedArtistCandidateKey(best))
+	if len(tied) > 1 {
+		return fmt.Sprintf("Among those, %s are tied for the deepest catalog in your library with %d albums each.", strings.Join(tied, " and "), bestCount), true
+	}
+	if runnerUpCount > 0 && strings.TrimSpace(runnerUp.Name) != "" {
+		return fmt.Sprintf("Among those, %s has the deepest catalog in your library with %d albums. Next is %s on %d.", best.Name, bestCount, runnerUp.Name, runnerUpCount), true
+	}
+	return fmt.Sprintf("Among those, %s has the deepest catalog in your library with %d albums.", best.Name, bestCount), true
 }
 
 func buildDeterministicLibraryFacetArgs(lowerMsg string) (map[string]interface{}, string, bool) {
@@ -378,15 +505,21 @@ func (s *Server) handleArtistLibraryStatsQuery(ctx context.Context, lowerMsg str
 	}
 
 	names := make([]string, 0, len(parsed.Data.Items))
+	stats := make([]artistAlbumStat, 0, len(parsed.Data.Items))
 	for _, item := range parsed.Data.Items {
 		if strings.TrimSpace(item.ArtistName) == "" {
 			continue
 		}
+		stats = append(stats, artistAlbumStat{
+			ArtistName: strings.TrimSpace(item.ArtistName),
+			AlbumCount: item.AlbumCount,
+		})
 		names = append(names, item.ArtistName)
 	}
 	if len(names) == 0 {
 		return "", false
 	}
+	rememberArtistLibraryStats(chatSessionIDFromContext(ctx), lowerMsg, stats)
 	return renderRouteBulletList(label, names, 8), true
 }
 

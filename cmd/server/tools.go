@@ -90,17 +90,42 @@ func executeTool(ctx context.Context, resolver *graph.Resolver, embeddingsURL st
 }
 
 func executeToolWithSimilarity(ctx context.Context, resolver *graph.Resolver, similarityService *similarity.Service, embeddingsURL string, tool string, args map[string]interface{}) (string, error) {
+	return executeToolWithSimilarityImpl(ctx, resolver, similarityService, embeddingsURL, tool, args)
+}
+
+var executeToolWithSimilarityImpl = func(ctx context.Context, resolver *graph.Resolver, similarityService *similarity.Service, embeddingsURL string, tool string, args map[string]interface{}) (string, error) {
 	if args == nil {
 		args = map[string]interface{}{}
 	}
-	args = repairToolArgs(tool, args)
+
+	// Enhanced tool argument repair with audit
+	repairedArgs, repairResult := repairToolArgsWithAudit(tool, args)
+
+	// Log repair results if anything changed
+	if repairResult.Repaired {
+		log.Info().
+			Str("tool", tool).
+			Strs("dropped_args", repairResult.DroppedArgs).
+			Interface("translated_args", repairResult.TranslatedArgs).
+			Strs("warnings", repairResult.Warnings).
+			Msg("Tool arguments repaired")
+	}
+
+	// Validate repaired args
+	validationWarnings := validateToolArgsSchema(tool, repairedArgs)
+	if len(validationWarnings) > 0 {
+		log.Warn().
+			Str("tool", tool).
+			Strs("warnings", validationWarnings).
+			Msg("Tool argument validation warnings")
+	}
 
 	handler, ok := toolHandlers[tool]
 	if !ok {
 		return "", fmt.Errorf("unsupported tool: %s", tool)
 	}
 
-	result, err := handler(ctx, toolRuntime{resolver: resolver, similarity: similarityService, embeddingsURL: embeddingsURL}, args)
+	result, err := handler(ctx, toolRuntime{resolver: resolver, similarity: similarityService, embeddingsURL: embeddingsURL}, repairedArgs)
 	if err != nil {
 		return "", err
 	}

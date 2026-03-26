@@ -8,6 +8,7 @@ import (
 type serverTurnRequest struct {
 	Intent              string                    `json:"intent"`
 	SubIntent           string                    `json:"subIntent,omitempty"`
+	ConversationOp      string                    `json:"conversationOp,omitempty"`
 	FollowupMode        string                    `json:"followupMode"`
 	QueryScope          string                    `json:"queryScope"`
 	TimeWindow          string                    `json:"timeWindow"`
@@ -23,6 +24,7 @@ type serverTurnRequest struct {
 	PromptHint          string                    `json:"promptHint,omitempty"`
 	Reference           serverTurnReference       `json:"reference"`
 	Workflow            serverTurnWorkflow        `json:"workflow"`
+	Conversation        serverTurnConversation    `json:"conversation,omitempty"`
 	Session             serverTurnSessionSnapshot `json:"session"`
 }
 
@@ -44,6 +46,14 @@ type serverTurnWorkflow struct {
 	SelectionValue        string `json:"selectionValue,omitempty"`
 	CompareSelectionMode  string `json:"compareSelectionMode,omitempty"`
 	CompareSelectionValue string `json:"compareSelectionValue,omitempty"`
+}
+
+type serverTurnConversation struct {
+	ObjectType   string `json:"objectType,omitempty"`
+	ObjectKind   string `json:"objectKind,omitempty"`
+	ObjectStatus string `json:"objectStatus,omitempty"`
+	ObjectIntent string `json:"objectIntent,omitempty"`
+	ObjectTarget string `json:"objectTarget,omitempty"`
 }
 
 type serverTurnSessionSnapshot struct {
@@ -71,6 +81,7 @@ func buildServerTurnRequestFromTurn(turn *Turn) serverTurnRequest {
 	return serverTurnRequest{
 		Intent:              strings.TrimSpace(turn.Normalized.Intent),
 		SubIntent:           strings.TrimSpace(turn.Normalized.SubIntent),
+		ConversationOp:      strings.TrimSpace(turn.Normalized.ConversationOp),
 		FollowupMode:        strings.TrimSpace(turn.Normalized.FollowupMode),
 		QueryScope:          strings.TrimSpace(turn.Normalized.QueryScope),
 		TimeWindow:          strings.TrimSpace(turn.Normalized.TimeWindow),
@@ -101,6 +112,13 @@ func buildServerTurnRequestFromTurn(turn *Turn) serverTurnRequest {
 			SelectionValue:        strings.TrimSpace(turn.Normalized.SelectionValue),
 			CompareSelectionMode:  strings.TrimSpace(turn.Normalized.CompareSelectionMode),
 			CompareSelectionValue: strings.TrimSpace(turn.Normalized.CompareSelectionValue),
+		},
+		Conversation: serverTurnConversation{
+			ObjectType:   strings.TrimSpace(turn.Reference.ObjectType),
+			ObjectKind:   strings.TrimSpace(turn.Reference.ObjectKind),
+			ObjectStatus: strings.TrimSpace(turn.Reference.ObjectStatus),
+			ObjectIntent: strings.TrimSpace(turn.Reference.ObjectIntent),
+			ObjectTarget: strings.TrimSpace(turn.Reference.ObjectTarget),
 		},
 		Session: serverTurnSessionSnapshot{
 			HasCreativeAlbumSet:    turn.Reference.HasCreativeAlbumSet,

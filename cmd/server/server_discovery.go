@@ -14,6 +14,8 @@ import (
 	"groovarr/internal/discovery"
 )
 
+var structuredCreativeLibrarySearchRunner = structuredCreativeLibrarySearchWithTool
+
 func (s *Server) tryEmbeddingsUnavailableSemanticLibraryQuery(rawMsg string) (string, bool) {
 	if strings.TrimSpace(s.embeddingsURL) != "" {
 		return "", false
@@ -159,6 +161,146 @@ func (s *Server) handleSpecificAlbumDiscovery(ctx context.Context, rawMsg string
 		return "", false
 	}
 	return renderRouteBulletList("A few album picks", items, 8), true
+}
+
+func formatDiscoveredAlbumCandidate(candidate discoveredAlbumCandidate) string {
+	label := strings.TrimSpace(candidate.AlbumTitle)
+	if label == "" {
+		return ""
+	}
+	if artist := strings.TrimSpace(candidate.ArtistName); artist != "" {
+		label += " by " + artist
+	}
+	if candidate.Year > 0 {
+		label += fmt.Sprintf(" (%d)", candidate.Year)
+	}
+	if reason := strings.TrimSpace(candidate.Reason); reason != "" {
+		label += " - " + reason
+	}
+	return label
+}
+
+func renderDiscoveredAlbumSet(prefix string, candidates []discoveredAlbumCandidate, limit int) string {
+	items := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if label := formatDiscoveredAlbumCandidate(candidate); label != "" {
+			items = append(items, label)
+		}
+	}
+	return renderRouteBulletList(prefix, items, limit)
+}
+
+func discoveredAlbumsToCreativeCandidates(candidates []discoveredAlbumCandidate) []creativeAlbumCandidate {
+	out := make([]creativeAlbumCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		name := strings.TrimSpace(candidate.AlbumTitle)
+		artist := strings.TrimSpace(candidate.ArtistName)
+		if name == "" || artist == "" {
+			continue
+		}
+		out = append(out, creativeAlbumCandidate{
+			Name:       name,
+			ArtistName: artist,
+			Year:       candidate.Year,
+		})
+	}
+	return out
+}
+
+func (s *Server) structuredCreativeLibraryCandidates(ctx context.Context, query string, limit int) ([]creativeAlbumCandidate, error) {
+	return structuredCreativeLibrarySearchRunner(ctx, s, strings.TrimSpace(query), limit)
+}
+
+func structuredCreativeLibrarySearchWithTool(ctx context.Context, s *Server, query string, limit int) ([]creativeAlbumCandidate, error) {
+	if s == nil || s.resolver == nil {
+		return nil, fmt.Errorf("semantic library search unavailable")
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	if limit <= 0 {
+		limit = 3
+	}
+	raw, err := executeTool(ctx, s.resolver, s.embeddingsURL, "semanticAlbumSearch", map[string]interface{}{
+		"queryText": query,
+		"limit":     limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Data struct {
+			Items struct {
+				Matches []semanticAlbumSearchMatch `json:"matches"`
+			} `json:"semanticAlbumSearch"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, err
+	}
+	return semanticMatchesToCreativeCandidates(parsed.Data.Items.Matches), nil
+}
+
+func requestedDiscoveryLimit(turn normalizedTurn, fallback int) int {
+	if fallback <= 0 {
+		fallback = 3
+	}
+	if strings.TrimSpace(turn.SelectionMode) == "top_n" {
+		if count, ok := parseTurnSelectionCount(turn.SelectionValue); ok && count > 0 && count <= 10 {
+			return count
+		}
+	}
+	return fallback
+}
+
+func (s *Server) handleStructuredGeneralAlbumDiscovery(ctx context.Context, resolved *resolvedTurnContext) (string, bool) {
+	if resolved == nil {
+		return "", false
+	}
+	turn := resolved.Turn
+	if turn.Intent != "album_discovery" || turn.FollowupMode != "none" || turn.NeedsClarification {
+		return "", false
+	}
+	if turn.QueryScope == "library" || (turn.LibraryOnly != nil && *turn.LibraryOnly) {
+		return "", false
+	}
+	if action := strings.TrimSpace(turn.ResultAction); action != "" && action != "none" {
+		return "", false
+	}
+
+	query := strings.TrimSpace(turn.RawMessage)
+	if query == "" {
+		query = strings.TrimSpace(turn.PromptHint)
+	}
+	if query == "" {
+		return "", false
+	}
+
+	limit := requestedDiscoveryLimit(turn, 3)
+	candidates, _, err := discoverAlbums(ctx, map[string]interface{}{
+		"query": query,
+		"limit": limit,
+	})
+	if err != nil || len(candidates) == 0 {
+		return "", false
+	}
+
+	sessionID := chatSessionIDFromContext(ctx)
+	setLastDiscoveredAlbums(sessionID, query, candidates)
+	updatedTurn := turn
+	updatedTurn.QueryScope = "general"
+	updatedTurn.ResultSetKind = "discovered_albums"
+	updatedTurn.PromptHint = query
+	setLastActiveFocusFromTurn(sessionID, "discovered_albums", "result_set", updatedTurn)
+	if len(candidates) == 1 {
+		setLastFocusedResultItem(sessionID, "discovered_albums", normalizedDiscoveredAlbumCandidateKey(candidates[0]))
+	}
+	return renderDiscoveredAlbumSet("A few records for that", candidates, limit), true
+}
+
+func (s *Server) handleStructuredGeneralAlbumDiscoveryTurn(ctx context.Context, turn *Turn) (string, bool) {
+	return s.handleStructuredGeneralAlbumDiscovery(ctx, turnToResolvedTurnContext(turn))
 }
 
 func buildSpecificAlbumDiscoveryArgs(rawMsg string) (map[string]interface{}, bool) {
@@ -381,36 +523,87 @@ func (s *Server) handleStructuredCreativeLibraryDiscovery(ctx context.Context, r
 	if query == "" {
 		return "", false
 	}
-	raw, err := executeTool(ctx, s.resolver, s.embeddingsURL, "semanticAlbumSearch", map[string]interface{}{
-		"queryText": query,
-		"limit":     3,
-	})
+	candidates, err := s.structuredCreativeLibraryCandidates(ctx, query, 3)
 	if err != nil {
 		return "", false
 	}
-	var parsed struct {
-		Data struct {
-			Items struct {
-				Matches []semanticAlbumSearchMatch `json:"matches"`
-			} `json:"semanticAlbumSearch"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return "", false
-	}
-	if len(parsed.Data.Items.Matches) == 0 {
-		return "I couldn't find strong library-backed picks for that mood yet. Give me one clearer cue like darker, warmer, more nocturnal, or more rhythmic, or I can look outside your library.", true
-	}
-	candidates := semanticMatchesToCreativeCandidates(parsed.Data.Items.Matches)
 	if len(candidates) == 0 {
 		return "I couldn't find strong library-backed picks for that mood yet. Give me one clearer cue like darker, warmer, more nocturnal, or more rhythmic, or I can look outside your library.", true
 	}
 	setLastCreativeAlbumSet(chatSessionIDFromContext(ctx), "semantic_structured", query, candidates)
+	setLastActiveFocusFromTurn(chatSessionIDFromContext(ctx), "creative_albums", "result_set", turn)
 	return renderCreativeAlbumSet("From your library", candidates, 3), true
 }
 
 func (s *Server) handleStructuredCreativeLibraryDiscoveryTurn(ctx context.Context, turn *Turn) (string, bool) {
 	return s.handleStructuredCreativeLibraryDiscovery(ctx, turnToResolvedTurnContext(turn))
+}
+
+type albumLookupCandidate struct {
+	Title      string
+	ArtistName string
+	Year       int
+}
+
+func (s *Server) handleStructuredAlbumLibraryLookup(ctx context.Context, rawMsg string, resolved *resolvedTurnContext) (string, bool) {
+	if resolved == nil {
+		return "", false
+	}
+	lower := strings.ToLower(strings.TrimSpace(rawMsg))
+	directLookup := isLibraryInventoryLookupPrompt(lower)
+	objectLookup := strings.TrimSpace(resolved.ConversationObjectKind) == "library_inventory_lookup" ||
+		strings.TrimSpace(resolved.ActiveFocusKind) == "library_inventory_lookup"
+	stickyLookup := objectLookup &&
+		strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" &&
+		strings.TrimSpace(resolved.Turn.QueryScope) == "library"
+	if !stickyLookup && (strings.TrimSpace(resolved.Turn.Intent) != "album_discovery" || strings.TrimSpace(resolved.Turn.QueryScope) != "library") {
+		return "", false
+	}
+	if !directLookup && !stickyLookup {
+		return "", false
+	}
+	query := extractInventoryLookupQueryFromTurn(resolved.Turn)
+	if query == "" {
+		query = extractLibraryLookupQuery(rawMsg)
+	}
+	if query == "" && stickyLookup {
+		query = extractInventoryLookupContinuationQuery(rawMsg)
+	}
+	if query == "" {
+		return "", false
+	}
+	title, artist, ok := splitLookupQueryArtist(query)
+	if !ok {
+		return "", false
+	}
+	raw, err := executeTool(ctx, s.resolver, s.embeddingsURL, "albums", map[string]interface{}{
+		"queryText":  title,
+		"artistName": artist,
+		"limit":      10,
+	})
+	if err != nil {
+		return "", false
+	}
+	candidates, ok := parseAlbumLookupCandidates(raw)
+	if !ok {
+		return "", false
+	}
+	match, found := findExactAlbumLookupMatch(title, artist, candidates)
+	setLastActiveFocus(chatSessionIDFromContext(ctx), "library_inventory_lookup", "album_mode")
+	if !found {
+		return fmt.Sprintf("No, I couldn't find %s by %s in your library.", title, artist), true
+	}
+	if match.Year > 0 {
+		return fmt.Sprintf("Yes, you have %s by %s (%d) in your library.", match.Title, match.ArtistName, match.Year), true
+	}
+	return fmt.Sprintf("Yes, you have %s by %s in your library.", match.Title, match.ArtistName), true
+}
+
+func (s *Server) handleStructuredAlbumLibraryLookupTurn(ctx context.Context, turn *Turn) (string, bool) {
+	if turn == nil {
+		return "", false
+	}
+	return s.handleStructuredAlbumLibraryLookup(ctx, turn.UserMessage, turnToResolvedTurnContext(turn))
 }
 
 type semanticAlbumRouteMatch struct {
@@ -422,6 +615,54 @@ type semanticAlbumRouteMatch struct {
 	PlayCount    int
 	LastPlayed   string
 	Explanations []string
+}
+
+func parseAlbumLookupCandidates(raw string) ([]albumLookupCandidate, bool) {
+	var parsed struct {
+		Data struct {
+			Albums []struct {
+				Name       string `json:"name"`
+				ArtistName string `json:"artistName"`
+				Year       *int   `json:"year"`
+			} `json:"albums"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, false
+	}
+	candidates := make([]albumLookupCandidate, 0, len(parsed.Data.Albums))
+	for _, item := range parsed.Data.Albums {
+		if strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		candidate := albumLookupCandidate{
+			Title:      strings.TrimSpace(item.Name),
+			ArtistName: strings.TrimSpace(item.ArtistName),
+		}
+		if item.Year != nil {
+			candidate.Year = *item.Year
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, true
+}
+
+func findExactAlbumLookupMatch(title, artist string, candidates []albumLookupCandidate) (albumLookupCandidate, bool) {
+	titleKey := normalizeReferenceText(title)
+	artistKey := normalizeReferenceText(artist)
+	if titleKey == "" || artistKey == "" {
+		return albumLookupCandidate{}, false
+	}
+	for _, candidate := range candidates {
+		if normalizeReferenceText(candidate.Title) != titleKey {
+			continue
+		}
+		if normalizeReferenceText(candidate.ArtistName) != artistKey {
+			continue
+		}
+		return candidate, true
+	}
+	return albumLookupCandidate{}, false
 }
 
 func (s *Server) pickSemanticAlbumMatch(ctx context.Context, query string, used map[string]struct{}, limit int) (string, bool) {

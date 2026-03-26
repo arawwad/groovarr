@@ -26,6 +26,11 @@ func (s *Server) buildLLMSessionContext(sessionID string) string {
 			sections = append(sections, section)
 		}
 	}
+	if object, ok := turnMemory.ActiveFocus(); ok {
+		if section := formatConversationObjectContext(object, now); section != "" {
+			sections = append(sections, section)
+		}
+	}
 	if actionSection := formatPendingActionContext(s.latestPendingAction(sessionID), now); actionSection != "" {
 		sections = append(sections, actionSection)
 	}
@@ -108,6 +113,54 @@ func formatPendingActionContext(action *PendingAction, now time.Time) string {
 	}
 	if len(action.Details) > 0 {
 		parts = append(parts, fmt.Sprintf("details=%q", strings.Join(action.Details, " | ")))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatConversationObjectContext(object conversationObjectState, now time.Time) string {
+	if object.updatedAt.IsZero() {
+		return ""
+	}
+	ttl := activeFocusTTL(object.kind)
+	if ttl <= 0 || now.Sub(object.updatedAt) > ttl {
+		return ""
+	}
+	parts := []string{
+		fmt.Sprintf("active_conversation_object: type=%s", strings.TrimSpace(object.objectType)),
+		fmt.Sprintf("kind=%s", strings.TrimSpace(object.kind)),
+	}
+	if status := strings.TrimSpace(object.status); status != "" {
+		parts = append(parts, fmt.Sprintf("status=%s", status))
+	}
+	if intent := strings.TrimSpace(object.preferredIntent); intent != "" {
+		parts = append(parts, fmt.Sprintf("intent=%s", intent))
+	}
+	if subIntent := strings.TrimSpace(object.preferredSubIntent); subIntent != "" {
+		parts = append(parts, fmt.Sprintf("sub_intent=%s", subIntent))
+	}
+	if action := strings.TrimSpace(object.preferredAction); action != "" {
+		parts = append(parts, fmt.Sprintf("action=%s", action))
+	}
+	if op := strings.TrimSpace(object.preferredOp); op != "" {
+		parts = append(parts, fmt.Sprintf("op=%s", op))
+	}
+	if target := strings.TrimSpace(object.referenceTarget); target != "" {
+		parts = append(parts, fmt.Sprintf("target=%s", target))
+	}
+	if scope := strings.TrimSpace(object.queryScope); scope != "" {
+		parts = append(parts, fmt.Sprintf("scope=%s", scope))
+	}
+	if object.libraryOnlySet {
+		parts = append(parts, fmt.Sprintf("library_only=%t", object.libraryOnly))
+	}
+	if artist := strings.TrimSpace(object.artistName); artist != "" {
+		parts = append(parts, fmt.Sprintf("artist=%q", artist))
+	}
+	if window := strings.TrimSpace(object.timeWindow); window != "" && window != "none" {
+		parts = append(parts, fmt.Sprintf("time_window=%s", window))
+	}
+	if hint := strings.TrimSpace(object.promptHint); hint != "" {
+		parts = append(parts, fmt.Sprintf("prompt=%q", hint))
 	}
 	return strings.Join(parts, "; ")
 }

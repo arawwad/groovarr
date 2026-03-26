@@ -26,6 +26,7 @@ type Server struct {
 	agent         chatAgent
 	normalizer    chatTurnNormalizer
 	planner       chatTurnPlanner
+	auditor       turnAuditor
 	turnResolver  chatTurnResolver
 	chatArchive   *chatSessionArchive
 	resolver      *graph.Resolver
@@ -48,6 +49,10 @@ type chatAgent interface {
 
 type chatTurnNormalizer interface {
 	NormalizeTurn(ctx context.Context, msg string, history []agent.Message, sessionContext string) (normalizedTurn, error)
+}
+
+type conversationObjectTurnClassifier interface {
+	ClassifyConversationObjectTurn(ctx context.Context, msg string, history []agent.Message, sessionContext string, turn normalizedTurn, object conversationObjectState) (conversationObjectDecision, error)
 }
 
 type chatTurnPlanner interface {
@@ -204,6 +209,7 @@ func main() {
 		agent:         agentExec,
 		normalizer:    newGroqTurnNormalizer(groqKey, groqModel),
 		planner:       newGroqTurnPlanner(groqKey, groqModel),
+		auditor:       newDefaultTurnAuditor(),
 		turnResolver:  newGroqTurnResolver(groqKey, groqModel),
 		chatArchive:   newChatSessionArchive(),
 		resolver:      resolver,

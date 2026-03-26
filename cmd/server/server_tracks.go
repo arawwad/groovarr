@@ -281,6 +281,89 @@ func (s *Server) handleStructuredTrackSearch(ctx context.Context, rawMsg string,
 	return renderTrackCandidateSet("Closest track matches in your library", candidates, 5), true
 }
 
+func (s *Server) handleStructuredTrackLibraryLookup(ctx context.Context, rawMsg string, resolved *resolvedTurnContext) (string, bool) {
+	if resolved == nil {
+		return "", false
+	}
+	lower := strings.ToLower(strings.TrimSpace(rawMsg))
+	directLookup := isLibraryInventoryLookupPrompt(lower)
+	objectLookup := strings.TrimSpace(resolved.ConversationObjectKind) == "library_inventory_lookup" ||
+		strings.TrimSpace(resolved.ActiveFocusKind) == "library_inventory_lookup"
+	stickyLookup := objectLookup &&
+		strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" &&
+		strings.TrimSpace(resolved.Turn.QueryScope) == "library"
+	if !directLookup && !stickyLookup {
+		return "", false
+	}
+	if !stickyLookup && strings.TrimSpace(resolved.Turn.QueryScope) != "library" {
+		return "", false
+	}
+	if !stickyLookup && strings.TrimSpace(resolved.Turn.Intent) != "track_discovery" {
+		return "", false
+	}
+	title := strings.TrimSpace(resolved.Turn.TrackTitle)
+	artist := strings.TrimSpace(resolved.Turn.ArtistName)
+	if title == "" {
+		query := extractInventoryLookupQueryFromTurn(resolved.Turn)
+		if query == "" {
+			query = extractLibraryLookupQuery(rawMsg)
+		}
+		if query == "" && stickyLookup {
+			query = extractInventoryLookupContinuationQuery(rawMsg)
+		}
+		if query == "" {
+			return "", false
+		}
+		if parsedTitle, parsedArtist, ok := splitLookupQueryArtist(query); ok {
+			title = parsedTitle
+			if artist == "" {
+				artist = parsedArtist
+			}
+		} else {
+			title = query
+		}
+	}
+	if title == "" {
+		return "", false
+	}
+	args := map[string]interface{}{
+		"queryText": title,
+		"limit":     10,
+	}
+	if artist != "" {
+		args["artistName"] = artist
+	}
+	raw, err := executeTool(ctx, s.resolver, s.embeddingsURL, "tracks", args)
+	if err != nil {
+		return "", false
+	}
+	candidates, ok := parseTrackLookupCandidates(raw)
+	if !ok {
+		return "", false
+	}
+	match, found := findExactTrackLookupMatch(title, artist, candidates)
+	sessionID := chatSessionIDFromContext(ctx)
+	setLastActiveFocus(sessionID, "library_inventory_lookup", "track_mode")
+	if !found {
+		if artist != "" {
+			return fmt.Sprintf("No, I couldn't find %s by %s in your library.", title, artist), true
+		}
+		return fmt.Sprintf("No, I couldn't find %s in your library.", title), true
+	}
+	setLastFocusedResultItem(sessionID, "track_candidates", normalizedTrackCandidateKey(match))
+	if artist != "" {
+		return fmt.Sprintf("Yes, you have %s by %s in your library.", match.Title, match.ArtistName), true
+	}
+	return fmt.Sprintf("Yes, you have %s in your library.", match.Title), true
+}
+
+func (s *Server) handleStructuredTrackLibraryLookupTurn(ctx context.Context, turn *Turn) (string, bool) {
+	if turn == nil {
+		return "", false
+	}
+	return s.handleStructuredTrackLibraryLookup(ctx, turn.UserMessage, turnToResolvedTurnContext(turn))
+}
+
 func (s *Server) handleStructuredTrackSearchTurn(ctx context.Context, turn *Turn) (string, bool) {
 	if turn == nil {
 		return "", false
@@ -478,6 +561,22 @@ func (s *Server) handleStructuredArtistStartingAlbum(ctx context.Context, resolv
 
 func (s *Server) handleStructuredArtistStartingAlbumTurn(ctx context.Context, turn *Turn) (string, bool) {
 	return s.handleStructuredArtistStartingAlbum(ctx, turnToResolvedTurnContext(turn))
+}
+
+func (s *Server) lookupTopRatedArtistAlbumCandidate(ctx context.Context, artistName string) (creativeAlbumCandidate, bool) {
+	raw, err := executeTool(ctx, s.resolver, s.embeddingsURL, "albums", map[string]interface{}{
+		"artistName": artistName,
+		"sortBy":     "rating",
+		"limit":      1,
+	})
+	if err != nil {
+		return creativeAlbumCandidate{}, false
+	}
+	albums, ok := parseArtistAlbumCandidates(raw)
+	if !ok || len(albums) == 0 {
+		return creativeAlbumCandidate{}, false
+	}
+	return albums[0], true
 }
 
 type trackSeed struct {
@@ -959,6 +1058,24 @@ func pickTrackCandidateForSeed(title string, candidates []trackCandidate) (track
 	return trackCandidate{}, false
 }
 
+func findExactTrackLookupMatch(title, artist string, candidates []trackCandidate) (trackCandidate, bool) {
+	titleKey := normalizeReferenceText(title)
+	artistKey := normalizeReferenceText(artist)
+	if titleKey == "" {
+		return trackCandidate{}, false
+	}
+	for _, candidate := range candidates {
+		if normalizeReferenceText(candidate.Title) != titleKey {
+			continue
+		}
+		if artistKey != "" && normalizeReferenceText(candidate.ArtistName) != artistKey {
+			continue
+		}
+		return candidate, true
+	}
+	return trackCandidate{}, false
+}
+
 func normalizedArtistCandidateKey(candidate artistCandidate) string {
 	if id := strings.TrimSpace(candidate.ID); id != "" {
 		return "artist:" + id
@@ -1309,28 +1426,61 @@ func parseArtistCandidates(raw string) ([]artistCandidate, bool) {
 }
 
 func parseArtistAlbums(raw string) ([]string, bool) {
+	candidates, ok := parseArtistAlbumCandidates(raw)
+	if !ok {
+		return nil, false
+	}
+	items := make([]string, 0, len(candidates))
+	for _, album := range candidates {
+		label := strings.TrimSpace(album.Name)
+		if label == "" {
+			continue
+		}
+		if album.Year > 0 {
+			label += fmt.Sprintf(" (%d)", album.Year)
+		}
+		items = append(items, label)
+	}
+	return items, true
+}
+
+func parseArtistAlbumCandidates(raw string) ([]creativeAlbumCandidate, bool) {
 	var parsed struct {
 		Data struct {
 			Albums []struct {
-				Name       string `json:"name"`
-				ArtistName string `json:"artistName"`
-				Year       *int   `json:"year"`
+				Name       string  `json:"name"`
+				ArtistName string  `json:"artistName"`
+				Year       *int    `json:"year"`
+				Genre      string  `json:"genre"`
+				PlayCount  *int    `json:"playCount"`
+				LastPlayed *string `json:"lastPlayed"`
 			} `json:"albums"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return nil, false
 	}
-	items := make([]string, 0, len(parsed.Data.Albums))
+	items := make([]creativeAlbumCandidate, 0, len(parsed.Data.Albums))
 	for _, album := range parsed.Data.Albums {
-		label := strings.TrimSpace(album.Name)
-		if label == "" {
+		name := strings.TrimSpace(album.Name)
+		if name == "" {
 			continue
 		}
-		if album.Year != nil && *album.Year > 0 {
-			label += fmt.Sprintf(" (%d)", *album.Year)
+		candidate := creativeAlbumCandidate{
+			Name:       name,
+			ArtistName: strings.TrimSpace(album.ArtistName),
+			Genre:      strings.TrimSpace(album.Genre),
 		}
-		items = append(items, label)
+		if album.Year != nil && *album.Year > 0 {
+			candidate.Year = *album.Year
+		}
+		if album.PlayCount != nil {
+			candidate.PlayCount = *album.PlayCount
+		}
+		if album.LastPlayed != nil {
+			candidate.LastPlayed = strings.TrimSpace(*album.LastPlayed)
+		}
+		items = append(items, candidate)
 	}
 	return items, true
 }

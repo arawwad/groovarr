@@ -37,6 +37,13 @@ func (s *Server) handleUnderplayedAlbums(ctx context.Context, rawMsg string) (st
 	}
 
 	setLastCreativeAlbumSet(chatSessionIDFromContext(ctx), "underplayed_albums", rawMsg, candidates)
+	libraryOnly := true
+	setLastActiveFocusFromTurn(chatSessionIDFromContext(ctx), "creative_albums", "result_set", normalizedTurn{
+		Intent:      "album_discovery",
+		QueryScope:  "library",
+		LibraryOnly: &libraryOnly,
+		PromptHint:  strings.TrimSpace(rawMsg),
+	})
 	return renderCreativeAlbumSet("Three underplayed records from your library", candidates, 3), true
 }
 
@@ -48,12 +55,9 @@ func (s *Server) handleStructuredCreativeAlbumSetFollowUp(ctx context.Context, r
 	return renderStructuredCreativeAlbumSetFollowUp(outcome)
 }
 
-func (s *Server) handleStructuredCreativeAlbumSetFollowUpTurn(ctx context.Context, turn *Turn) (string, bool) {
-	return s.handleStructuredCreativeAlbumSetFollowUp(ctx, turnToResolvedTurnContext(turn))
-}
-
 type creativeFollowUpOutcome struct {
 	kind       string
+	artistName string
 	single     *creativeAlbumCandidate
 	candidates []creativeAlbumCandidate
 	windowFrom time.Time
@@ -68,6 +72,9 @@ func (s *Server) resolveStructuredCreativeAlbumSetFollowUpOutcome(ctx context.Co
 	candidates, mode, ok := creativeCandidatesFromResolvedReference(sessionID, resolved)
 	if !ok {
 		return creativeFollowUpOutcome{}, false
+	}
+	if outcome, ok := resolveCreativeArtistFilteredFollowUp(sessionID, mode, resolved, candidates); ok {
+		return outcome, true
 	}
 
 	switch strings.TrimSpace(resolved.Turn.SubIntent) {
@@ -101,6 +108,7 @@ func (s *Server) resolveStructuredCreativeAlbumSetFollowUpOutcome(ctx context.Co
 			return creativeFollowUpOutcome{kind: "refinement_empty"}, true
 		}
 		setLastCreativeAlbumSet(sessionID, mode, strings.Join(resolved.Turn.StyleHints, " "), refined)
+		setLastActiveFocusFromTurn(sessionID, "creative_albums", "result_set", resolved.Turn)
 		return creativeFollowUpOutcome{kind: "refinement_set", candidates: refined}, true
 	default:
 		return creativeFollowUpOutcome{}, false
@@ -161,6 +169,25 @@ func creativeExecutionHandlers() []serverExecutionHandler {
 
 func renderStructuredCreativeAlbumSetFollowUp(outcome creativeFollowUpOutcome) (string, bool) {
 	switch outcome.kind {
+	case "artist_filter_empty":
+		if strings.TrimSpace(outcome.artistName) == "" {
+			return "None of those match that artist.", true
+		}
+		return fmt.Sprintf("None of those are by %s.", outcome.artistName), true
+	case "artist_filter_single":
+		if outcome.single == nil {
+			return "", false
+		}
+		return fmt.Sprintf("From those, %s.", formatCreativeAlbumCandidate(*outcome.single, true)), true
+	case "artist_filter_set":
+		if len(outcome.candidates) == 0 {
+			return "", false
+		}
+		label := "From those"
+		if strings.TrimSpace(outcome.artistName) != "" {
+			label = fmt.Sprintf("From those, %s picks", outcome.artistName)
+		}
+		return renderCreativeAlbumSet(label, outcome.candidates, len(outcome.candidates)), true
 	case "most_recent_empty":
 		return "None of those look recently played.", true
 	case "most_recent_single":
@@ -188,6 +215,72 @@ func renderStructuredCreativeAlbumSetFollowUp(outcome creativeFollowUpOutcome) (
 	default:
 		return "", false
 	}
+}
+
+func resolveCreativeArtistFilteredFollowUp(sessionID, mode string, resolved *resolvedTurnContext, candidates []creativeAlbumCandidate) (creativeFollowUpOutcome, bool) {
+	if resolved == nil || len(candidates) == 0 {
+		return creativeFollowUpOutcome{}, false
+	}
+	artistName := strings.TrimSpace(resolved.Turn.ArtistName)
+	if artistName == "" {
+		return creativeFollowUpOutcome{}, false
+	}
+	filtered := filterCreativeCandidatesByArtistName(candidates, artistName)
+	if len(filtered) == 0 {
+		return creativeFollowUpOutcome{kind: "artist_filter_empty", artistName: artistName}, true
+	}
+	limit := creativeArtistFollowUpLimit(resolved.Turn, len(filtered))
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	setLastCreativeAlbumSet(sessionID, mode, resolved.Turn.RawMessage, filtered)
+	setLastActiveFocusFromTurn(sessionID, "creative_albums", "result_set", resolved.Turn)
+	if len(filtered) == 1 {
+		setLastFocusedResultItem(sessionID, "creative_albums", normalizedCreativeAlbumCandidateKey(filtered[0]))
+		return creativeFollowUpOutcome{
+			kind:       "artist_filter_single",
+			artistName: artistName,
+			single:     &filtered[0],
+		}, true
+	}
+	return creativeFollowUpOutcome{
+		kind:       "artist_filter_set",
+		artistName: artistName,
+		candidates: filtered,
+	}, true
+}
+
+func filterCreativeCandidatesByArtistName(candidates []creativeAlbumCandidate, artistName string) []creativeAlbumCandidate {
+	artistKey := normalizeReferenceText(artistName)
+	if artistKey == "" {
+		return nil
+	}
+	filtered := make([]creativeAlbumCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidateKey := normalizeReferenceText(candidate.ArtistName)
+		if candidateKey == "" {
+			continue
+		}
+		if candidateKey == artistKey || strings.Contains(candidateKey, artistKey) || strings.Contains(artistKey, candidateKey) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
+}
+
+func creativeArtistFollowUpLimit(turn normalizedTurn, max int) int {
+	if strings.TrimSpace(turn.SelectionMode) == "top_n" {
+		if count, ok := parseTurnSelectionCount(turn.SelectionValue); ok && count > 0 {
+			if count > max {
+				return max
+			}
+			return count
+		}
+	}
+	if creativeArtistFollowupWantsSingle(turn) {
+		return 1
+	}
+	return max
 }
 
 func describeStructuredRecentListeningInterpretation(state recentListeningState, subIntent string) (string, bool) {
@@ -453,6 +546,12 @@ func creativeCandidatesFromResolvedReference(sessionID string, resolved *resolve
 			mode = strings.TrimSpace(queryText)
 		}
 		return semanticMatchesToCreativeCandidates(matches), mode, true
+	case "discovered_albums":
+		candidates, updatedAt, queryText, ok := memory.DiscoveredAlbums()
+		if !ok || len(candidates) == 0 || updatedAt.IsZero() || time.Since(updatedAt) > llmContextDiscoveredAlbumsTTL {
+			return nil, "", false
+		}
+		return discoveredAlbumsToCreativeCandidates(candidates), strings.TrimSpace(queryText), true
 	default:
 		return nil, "", false
 	}

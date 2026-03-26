@@ -30,6 +30,9 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 	if resp, ok := s.handleStructuredSceneOverviewTurn(ctx, turn); ok {
 		return ChatResponse{Response: resp}, true
 	}
+	if resp, ok := s.handleStructuredConversationObjectTurn(ctx, turn); ok {
+		return resp, true
+	}
 
 	switch normalized.Intent {
 	case "general_chat", "other":
@@ -44,6 +47,9 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 		}
 		return ChatResponse{}, false
 	case "track_discovery":
+		if resp, ok := s.handleStructuredTrackLibraryLookupTurn(ctx, turn); ok {
+			return ChatResponse{Response: resp}, true
+		}
 		if resp, ok := s.handleStructuredSongPathSummaryTurn(ctx, turn); ok {
 			return ChatResponse{Response: resp}, true
 		}
@@ -89,13 +95,7 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 			}
 		}
 		if normalized.FollowupMode != "none" {
-			if resp, ok := s.handleAlbumResultSetListeningFollowUpTurn(ctx, turn); ok {
-				return ChatResponse{Response: resp}, true
-			}
 			if resp, ok := s.tryRecentListeningInterpretationTurn(chatCtxOrBackground(ctx), turn); ok {
-				return ChatResponse{Response: resp}, true
-			}
-			if resp, ok := s.handleStructuredCreativeAlbumSetFollowUpTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
 		}
@@ -105,6 +105,9 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 			}
 		}
 	case "stats":
+		if resp, ok := s.handleStructuredArtistCatalogDepthTurn(ctx, turn); ok {
+			return ChatResponse{Response: resp}, true
+		}
 		if normalized.FollowupMode != "none" || strings.TrimSpace(normalized.SubIntent) == "listening_interpretation" || strings.TrimSpace(normalized.SubIntent) == "artist_dominance" {
 			if resp, ok := s.tryRecentListeningInterpretationTurn(chatCtxOrBackground(ctx), turn); ok {
 				return ChatResponse{Response: resp}, true
@@ -116,6 +119,9 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 			}
 		}
 		if normalized.QueryScope == "library" {
+			if resp, ok := s.handleArtistAlbumCount(ctx, msg); ok {
+				return ChatResponse{Response: resp}, true
+			}
 			if resp, ok := s.handleLibraryFacetQuery(ctx, lowerMsg); ok {
 				return ChatResponse{Response: resp}, true
 			}
@@ -130,18 +136,15 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 			}
 		}
 	case "album_discovery":
+		if resp, ok := s.handleStructuredAlbumLibraryLookupTurn(ctx, turn); ok {
+			return ChatResponse{Response: resp}, true
+		}
 		if normalized.FollowupMode != "none" {
-			if resp, ok := s.handleAlbumResultSetListeningFollowUpTurn(ctx, turn); ok {
-				return ChatResponse{Response: resp}, true
-			}
 			if resp, ok := s.handleStructuredDiscoveredAlbumsAvailabilityTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp}, true
 			}
 			if resp, pendingAction, ok := s.handleStructuredDiscoveredAlbumsApplyTurn(ctx, turn); ok {
 				return ChatResponse{Response: resp, PendingAction: pendingAction}, true
-			}
-			if resp, ok := s.handleStructuredCreativeAlbumSetFollowUpTurn(ctx, turn); ok {
-				return ChatResponse{Response: resp}, true
 			}
 		}
 		if normalized.QueryScope == "library" {
@@ -154,6 +157,9 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 			if resp, ok := s.tryCreativeLibraryAlbumsRoute(ctx, lowerMsg); ok {
 				return ChatResponse{Response: resp}, true
 			}
+		}
+		if resp, ok := s.handleStructuredGeneralAlbumDiscoveryTurn(ctx, turn); ok {
+			return ChatResponse{Response: resp}, true
 		}
 		if resp, ok := s.handleSpecificAlbumDiscovery(ctx, msg); ok {
 			return ChatResponse{Response: resp}, true
@@ -193,9 +199,6 @@ func (s *Server) tryTurnIntentRoute(ctx context.Context, turn *Turn, history []a
 		if resp, ok := s.handleStructuredPlaylistTracksQueryTurn(ctx, turn, history); ok {
 			return ChatResponse{Response: resp}, true
 		}
-		if resp, ok := s.handleStructuredPlaylistAvailabilityTurn(ctx, turn); ok {
-			return ChatResponse{Response: resp}, true
-		}
 	}
 
 	return ChatResponse{}, false
@@ -217,10 +220,6 @@ func (s *Server) handleAlbumResultSetListeningFollowUp(ctx context.Context, reso
 		return "", false
 	}
 	return renderAlbumResultSetListeningFollowUp(outcome)
-}
-
-func (s *Server) handleAlbumResultSetListeningFollowUpTurn(ctx context.Context, turn *Turn) (string, bool) {
-	return s.handleAlbumResultSetListeningFollowUp(ctx, turnToResolvedTurnContext(turn))
 }
 
 type albumResultSetListeningOutcome struct {
@@ -324,16 +323,14 @@ func (s *Server) tryNormalizedArtistListeningStats(ctx context.Context, turn nor
 
 	var parsed struct {
 		Data struct {
-			Items []struct {
-				ArtistName    string `json:"artistName"`
-				AlbumCount    int    `json:"albumCount"`
-				PlaysInWindow int    `json:"playsInWindow"`
-			} `json:"artistListeningStats"`
+			Items []artistListeningStatItem `json:"artistListeningStats"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil || len(parsed.Data.Items) == 0 {
 		return "", false
 	}
+
+	rememberArtistListeningStats(chatSessionIDFromContext(ctx), turn.TimeWindow, parsed.Data.Items)
 
 	if strings.TrimSpace(turn.SubIntent) == "artist_dominance" {
 		return renderNormalizedArtistDominance(parsed.Data.Items, turn), true
@@ -354,11 +351,7 @@ func (s *Server) tryNormalizedArtistListeningStats(ctx context.Context, turn nor
 	return renderRouteBulletList("Top artists in this window", items, 8), true
 }
 
-func renderNormalizedArtistDominance(items []struct {
-	ArtistName    string `json:"artistName"`
-	AlbumCount    int    `json:"albumCount"`
-	PlaysInWindow int    `json:"playsInWindow"`
-}, turn normalizedTurn) string {
+func renderNormalizedArtistDominance(items []artistListeningStatItem, turn normalizedTurn) string {
 	topName := strings.TrimSpace(items[0].ArtistName)
 	topPlays := items[0].PlaysInWindow
 	window := normalizedTimeWindowLabel(turn.TimeWindow)
@@ -397,11 +390,8 @@ func chatCtxOrBackground(ctx context.Context) context.Context {
 }
 
 func (s *Server) tryPlaylistCreateTurn(ctx context.Context, turn *Turn) (ChatResponse, bool) {
-	if turn != nil {
-		subIntent := strings.TrimSpace(turn.Normalized.SubIntent)
-		if subIntent != "" && subIntent != "playlist_vibe" {
-			return ChatResponse{}, false
-		}
+	if turn != nil && !isPlaylistCreateLikeTurn(turn) {
+		return ChatResponse{}, false
 	}
 	rawMsg := ""
 	var normalized TurnNormalized
@@ -424,7 +414,59 @@ func (s *Server) tryPlaylistCreateTurn(ctx context.Context, turn *Turn) (ChatRes
 	if err != nil {
 		return ChatResponse{}, false
 	}
+	sessionID := chatSessionIDFromContext(ctx)
+	focusTurn := playlistDraftFocusTurn(turn, prompt)
+	setLastActiveFocusFromTurn(sessionID, "playlist_candidates", "draft_preview", focusTurn)
 	return ChatResponse{Response: response, PendingAction: pendingAction}, true
+}
+
+func playlistDraftFocusTurn(turn *Turn, prompt string) normalizedTurn {
+	prompt = strings.TrimSpace(prompt)
+	if turn == nil {
+		return normalizedTurn{
+			Intent:          "playlist",
+			SubIntent:       "playlist_vibe",
+			FollowupMode:    "none",
+			QueryScope:      "playlist",
+			TimeWindow:      "none",
+			ResultSetKind:   "playlist_candidates",
+			ResultAction:    "none",
+			SelectionMode:   "none",
+			ReferenceTarget: "previous_playlist",
+			PromptHint:      prompt,
+		}
+	}
+	referenceTarget := strings.TrimSpace(turn.Normalized.ReferenceTarget)
+	if referenceTarget == "" || referenceTarget == "none" {
+		referenceTarget = "previous_playlist"
+	}
+	return normalizedTurn{
+		RawMessage:            strings.TrimSpace(turn.UserMessage),
+		Intent:                firstNonEmpty(strings.TrimSpace(turn.Normalized.Intent), "playlist"),
+		SubIntent:             firstNonEmpty(strings.TrimSpace(turn.Normalized.SubIntent), "playlist_vibe"),
+		ConversationOp:        strings.TrimSpace(turn.Normalized.ConversationOp),
+		StyleHints:            append([]string(nil), turn.Normalized.StyleHints...),
+		FollowupMode:          firstNonEmpty(strings.TrimSpace(turn.Normalized.FollowupMode), "none"),
+		QueryScope:            firstNonEmpty(strings.TrimSpace(turn.Normalized.QueryScope), "playlist"),
+		LibraryOnly:           turn.Normalized.LibraryOnly,
+		TimeWindow:            firstNonEmpty(strings.TrimSpace(turn.Normalized.TimeWindow), "none"),
+		ResultSetKind:         "playlist_candidates",
+		ResultAction:          firstNonEmpty(strings.TrimSpace(turn.Normalized.ResultAction), "none"),
+		SelectionMode:         firstNonEmpty(strings.TrimSpace(turn.Normalized.SelectionMode), "none"),
+		SelectionValue:        strings.TrimSpace(turn.Normalized.SelectionValue),
+		CompareSelectionMode:  firstNonEmpty(strings.TrimSpace(turn.Normalized.CompareSelectionMode), "none"),
+		CompareSelectionValue: strings.TrimSpace(turn.Normalized.CompareSelectionValue),
+		TargetName:            strings.TrimSpace(turn.Normalized.TargetName),
+		ArtistName:            strings.TrimSpace(turn.Normalized.ArtistName),
+		TrackTitle:            strings.TrimSpace(turn.Normalized.TrackTitle),
+		PromptHint:            prompt,
+		NeedsClarification:    turn.Normalized.NeedsClarification,
+		ClarificationFocus:    firstNonEmpty(strings.TrimSpace(turn.Normalized.ClarificationFocus), "none"),
+		ClarificationPrompt:   strings.TrimSpace(turn.Normalized.ClarificationPrompt),
+		ReferenceTarget:       referenceTarget,
+		ReferenceQualifier:    strings.TrimSpace(turn.Normalized.ReferenceQualifier),
+		Confidence:            strings.TrimSpace(turn.Normalized.Confidence),
+	}
 }
 
 func (s *Server) tryNormalizedPlaylistCreate(ctx context.Context, rawMsg string, resolved *resolvedTurnContext) (ChatResponse, bool) {
@@ -443,8 +485,7 @@ func shouldAttemptPlaylistCreateTurn(turn *Turn) bool {
 	if strings.TrimSpace(turn.Normalized.FollowupMode) != "" && strings.TrimSpace(turn.Normalized.FollowupMode) != "none" {
 		return false
 	}
-	subIntent := strings.TrimSpace(turn.Normalized.SubIntent)
-	if subIntent != "" && subIntent != "playlist_vibe" {
+	if !isPlaylistCreateLikeTurn(turn) {
 		return false
 	}
 	if extractNormalizedPlaylistCreateIntent(turn.UserMessage) != "" {
@@ -459,6 +500,27 @@ func shouldAttemptPlaylistCreateTurn(turn *Turn) bool {
 			strings.Contains(lower, "assemble ") ||
 			strings.Contains(lower, "spin up ") ||
 			strings.Contains(lower, "queue up "))
+}
+
+func isPlaylistCreateLikeTurn(turn *Turn) bool {
+	if turn == nil {
+		return false
+	}
+	subIntent := strings.TrimSpace(turn.Normalized.SubIntent)
+	if subIntent == "" || subIntent == "playlist_vibe" {
+		return true
+	}
+	if subIntent != "playlist_append" {
+		return false
+	}
+	if strings.TrimSpace(turn.Normalized.FollowupMode) != "" && strings.TrimSpace(turn.Normalized.FollowupMode) != "none" {
+		return false
+	}
+	if strings.TrimSpace(turn.Normalized.TargetName) != "" &&
+		extractNormalizedPlaylistCreateIntent(turn.UserMessage) == "" {
+		return false
+	}
+	return true
 }
 
 func normalizedPlaylistCreatePrompt(turn TurnNormalized) string {

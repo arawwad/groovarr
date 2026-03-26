@@ -14,8 +14,10 @@ import (
 )
 
 type normalizedTurn struct {
+	RawMessage            string   `json:"-"`
 	Intent                string   `json:"intent"`
 	SubIntent             string   `json:"subIntent,omitempty"`
+	ConversationOp        string   `json:"conversationOp,omitempty"`
 	StyleHints            []string `json:"styleHints,omitempty"`
 	FollowupMode          string   `json:"followupMode"`
 	QueryScope            string   `json:"queryScope"`
@@ -40,29 +42,55 @@ type normalizedTurn struct {
 }
 
 type resolvedTurnContext struct {
-	Turn                    normalizedTurn
-	ResolvedReferenceKind   string
-	ResolvedReferenceSource string
-	ResolvedItemKey         string
-	ResolvedItemSource      string
-	HasCreativeAlbumSet     bool
-	HasSemanticAlbumSet     bool
-	HasDiscoveredAlbums     bool
-	HasCleanupCandidates    bool
-	HasBadlyRatedAlbums     bool
-	HasRecentListening      bool
-	HasPendingPlaylistPlan  bool
-	HasResolvedScene        bool
-	HasSongPath             bool
-	HasTrackCandidates      bool
-	HasArtistCandidates     bool
-	AmbiguousReference      bool
-	MissingReferenceContext bool
+	Turn                     normalizedTurn
+	ResolvedReferenceKind    string
+	ResolvedReferenceSource  string
+	ResolvedItemKey          string
+	ResolvedItemSource       string
+	HasActiveFocus           bool
+	ActiveFocusKind          string
+	ActiveFocusStatus        string
+	HasConversationObject    bool
+	ConversationObjectType   string
+	ConversationObjectKind   string
+	ConversationObjectStatus string
+	ConversationObjectIntent string
+	ConversationObjectTarget string
+	HasCreativeAlbumSet      bool
+	HasSemanticAlbumSet      bool
+	HasDiscoveredAlbums      bool
+	HasCleanupCandidates     bool
+	HasBadlyRatedAlbums      bool
+	HasRecentListening       bool
+	HasPendingPlaylistPlan   bool
+	HasResolvedScene         bool
+	HasSongPath              bool
+	HasTrackCandidates       bool
+	HasArtistCandidates      bool
+	AmbiguousReference       bool
+	MissingReferenceContext  bool
 }
 
 type groqTurnNormalizer struct {
 	apiKey string
 	model  string
+}
+
+type conversationObjectDecision struct {
+	UseActiveObject     bool   `json:"useActiveObject"`
+	FollowupMode        string `json:"followupMode"`
+	ReferenceTarget     string `json:"referenceTarget"`
+	ConversationOp      string `json:"conversationOp"`
+	IntentOverride      string `json:"intentOverride,omitempty"`
+	SubIntentOverride   string `json:"subIntentOverride,omitempty"`
+	QueryScopeOverride  string `json:"queryScopeOverride,omitempty"`
+	ResultSetKind       string `json:"resultSetKind,omitempty"`
+	SelectionMode       string `json:"selectionMode,omitempty"`
+	SelectionValue      string `json:"selectionValue,omitempty"`
+	NeedsClarification  bool   `json:"needsClarification"`
+	ClarificationPrompt string `json:"clarificationPrompt,omitempty"`
+	ClarificationFocus  string `json:"clarificationFocus,omitempty"`
+	Confidence          string `json:"confidence,omitempty"`
 }
 
 func newGroqTurnNormalizer(apiKey, defaultModel string) chatTurnNormalizer {
@@ -92,6 +120,74 @@ func (n *groqTurnNormalizer) NormalizeTurn(ctx context.Context, msg string, hist
 		return normalizedTurn{}, nil
 	}
 	return n.normalizeWithPrompt(ctx, msg, history, sessionContext, buildTurnNormalizerSystemPrompt(false))
+}
+
+func (n *groqTurnNormalizer) ClassifyConversationObjectTurn(ctx context.Context, msg string, history []agent.Message, sessionContext string, turn normalizedTurn, object conversationObjectState) (conversationObjectDecision, error) {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return conversationObjectDecision{}, nil
+	}
+	systemPrompt := `You classify whether a user turn should operate on the active conversation object for a music assistant. Return strict JSON only.
+
+Schema:
+{
+  "useActiveObject": true,
+  "followupMode": "none|refine_previous|query_previous_set|pivot",
+  "referenceTarget": "none|previous_results|previous_taste|previous_playlist|previous_stats",
+  "conversationOp": "none|query|refine|constrain|select|inspect|apply|compare|pivot",
+  "intentOverride": "album_discovery|track_discovery|artist_discovery|scene_discovery|listening|stats|playlist|general_chat|other|none",
+  "subIntentOverride": "short snake_case string or none",
+  "queryScopeOverride": "general|library|listening|stats|playlist|unknown|none",
+  "resultSetKind": "none|creative_albums|semantic_albums|discovered_albums|cleanup_candidates|badly_rated_albums|playlist_candidates|recent_listening|scene_candidates|song_path|track_candidates|artist_candidates",
+  "selectionMode": "none|all|top_n|ordinal|explicit_names|missing_only|count_match",
+  "selectionValue": "compact selection payload or empty",
+  "needsClarification": false,
+  "clarificationPrompt": "one concise question or empty",
+  "clarificationFocus": "none|scope|time_window|target_type|reference|other",
+  "confidence": "low|medium|high"
+}
+
+Rules:
+- Prefer useActiveObject=true when the user is naturally continuing, correcting, narrowing, selecting from, or inspecting the active object.
+- Prefer useActiveObject=false only when the user is clearly starting a fresh request unrelated to the active object.
+- Respect the active object's conversationOps, resultActions, and selectors. Do not choose operations outside that capability envelope.
+- Use conversationOp=query for natural continuations over a prior result set.
+- Use conversationOp=refine when the user is changing qualities of a draft or result set.
+- Use conversationOp=constrain when the user is tightening scope or constraints on the same object, such as switching to library-only.
+- Use conversationOp=select when the user chooses one item or one named artist from the active object.
+- Use conversationOp=inspect for recency, availability, or other inspection follow-ups.
+- Use conversationOp=apply for approval-style follow-ups.
+- Use conversationOp=pivot only when the user clearly leaves the active object behind.
+- If useActiveObject=true, set followupMode and referenceTarget consistently.
+- Only use intentOverride/subIntentOverride when the current normalized turn needs correction to act on the object.
+- Do not rely on generic phrase matching alone; use the active object semantics and current normalized turn.
+- Return JSON only.`
+
+	userPrompt := fmt.Sprintf(
+		"Latest user message:\n%s\n\nCurrent normalized turn:\n%s\n\nActive conversation object:\n%s\n\nRecent chat history:\n%s\n\nServer session context:\n%s",
+		msg,
+		renderNormalizedTurn(turn),
+		renderConversationObjectDecisionContext(object),
+		renderNormalizerHistory(history),
+		renderNormalizerSessionContext(sessionContext),
+	)
+
+	timeoutMS := envInt("CHAT_NORMALIZER_TIMEOUT_MS", 4000)
+	if timeoutMS < 500 {
+		timeoutMS = 500
+	}
+	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMS)*time.Millisecond)
+	defer cancel()
+
+	raw, err := callGroqJSON(callCtx, n.apiKey, n.model, systemPrompt, userPrompt, envInt("CHAT_NORMALIZER_MAX_TOKENS", 220))
+	if err != nil {
+		return conversationObjectDecision{}, err
+	}
+	var parsed conversationObjectDecision
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return conversationObjectDecision{}, fmt.Errorf("failed to parse conversation object decision: %w", err)
+	}
+	return sanitizeConversationObjectDecision(parsed), nil
 }
 
 func buildTurnNormalizerSystemPrompt(referenceRecovery bool) string {
@@ -283,7 +379,11 @@ func (s *Server) normalizeResolvedTurn(ctx context.Context, sessionID, msg strin
 	if err != nil {
 		return nil, err
 	}
-	resolved := resolveTurnContext(sessionID, sanitizeNormalizedTurn(msg, turn))
+	turn = sanitizeNormalizedTurn(msg, turn)
+	turn = s.applyConversationObjectDecision(ctx, sessionID, msg, history, sessionContext, turn)
+	resolved := resolveTurnContext(sessionID, turn)
+	resolved = applyPreviousTurnClarificationCarryover(sessionID, resolved)
+	resolved = applyStatsScopeCorrectionCarryover(sessionID, resolved)
 	if shouldDeferMissingReferenceClarification(resolved, history) {
 		resolved = clearMissingReferenceClarification(resolved)
 	}
@@ -292,6 +392,110 @@ func (s *Server) normalizeResolvedTurn(ctx context.Context, sessionID, msg strin
 	}
 	setLastNormalizedTurn(sessionID, resolved.Turn)
 	return &resolved, nil
+}
+
+func (s *Server) applyConversationObjectDecision(ctx context.Context, sessionID, msg string, history []agent.Message, sessionContext string, turn normalizedTurn) normalizedTurn {
+	classifier, ok := s.normalizer.(conversationObjectTurnClassifier)
+	if !ok {
+		return turn
+	}
+	memory := loadTurnSessionMemory(sessionID)
+	object, ok := memory.ActiveFocus()
+	if !ok {
+		return turn
+	}
+	decision, err := classifier.ClassifyConversationObjectTurn(ctx, msg, history, sessionContext, turn, object)
+	if err != nil {
+		log.Warn().Err(err).Str("request_id", chatRequestIDFromContext(ctx)).Msg("Conversation object classifier failed")
+		return turn
+	}
+	return applyConversationObjectDecision(turn, object, decision)
+}
+
+func applyPreviousTurnClarificationCarryover(sessionID string, resolved resolvedTurnContext) resolvedTurnContext {
+	prevTurn, _, ok := getLastNormalizedTurn(sessionID)
+	if !ok {
+		return resolved
+	}
+	if strings.TrimSpace(prevTurn.Intent) != "stats" || !prevTurn.NeedsClarification || strings.TrimSpace(prevTurn.ClarificationFocus) != "scope" {
+		return resolved
+	}
+	scope, ok := resolveStatsScopeClarification(resolved.Turn.RawMessage)
+	if !ok {
+		return resolved
+	}
+	resolved.Turn.Intent = "stats"
+	resolved.Turn.QueryScope = scope
+	if strings.TrimSpace(resolved.Turn.SubIntent) == "" || strings.TrimSpace(resolved.Turn.SubIntent) == "listening_summary" {
+		resolved.Turn.SubIntent = strings.TrimSpace(prevTurn.SubIntent)
+	}
+	resolved.Turn.NeedsClarification = false
+	resolved.Turn.ClarificationFocus = "none"
+	resolved.Turn.ClarificationPrompt = ""
+	return resolved
+}
+
+func resolveStatsScopeClarification(rawMsg string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(rawMsg))
+	if lower == "" {
+		return "", false
+	}
+	switch {
+	case strings.Contains(lower, "listening"):
+		return "listening", true
+	case strings.Contains(lower, "library"):
+		return "library", true
+	default:
+		return "", false
+	}
+}
+
+func applyStatsScopeCorrectionCarryover(sessionID string, resolved resolvedTurnContext) resolvedTurnContext {
+	scope, ok := resolveStatsScopeClarification(resolved.Turn.RawMessage)
+	if !ok {
+		return resolved
+	}
+
+	prevTurn, _, hasPrevTurn := getLastNormalizedTurn(sessionID)
+	memory := loadTurnSessionMemory(sessionID)
+	focus, hasFocus := memory.ActiveFocus()
+
+	statsContext := hasPrevTurn && strings.TrimSpace(prevTurn.Intent) == "stats"
+	if !statsContext && (!hasFocus || strings.TrimSpace(focus.preferredIntent) != "stats") {
+		return resolved
+	}
+
+	currentIntent := strings.TrimSpace(resolved.Turn.Intent)
+	if currentIntent != "" &&
+		currentIntent != "other" &&
+		currentIntent != "general_chat" &&
+		currentIntent != "listening" &&
+		currentIntent != "stats" {
+		return resolved
+	}
+
+	resolved.Turn.Intent = "stats"
+	resolved.Turn.QueryScope = scope
+	if strings.TrimSpace(resolved.Turn.SubIntent) == "" || strings.TrimSpace(resolved.Turn.SubIntent) == "listening_summary" {
+		switch {
+		case hasPrevTurn && strings.TrimSpace(prevTurn.SubIntent) != "":
+			resolved.Turn.SubIntent = strings.TrimSpace(prevTurn.SubIntent)
+		case hasFocus && strings.TrimSpace(focus.preferredSubIntent) != "":
+			resolved.Turn.SubIntent = strings.TrimSpace(focus.preferredSubIntent)
+		}
+	}
+	if strings.TrimSpace(resolved.Turn.TimeWindow) == "" || strings.TrimSpace(resolved.Turn.TimeWindow) == "none" {
+		switch {
+		case hasPrevTurn && strings.TrimSpace(prevTurn.TimeWindow) != "" && strings.TrimSpace(prevTurn.TimeWindow) != "none":
+			resolved.Turn.TimeWindow = strings.TrimSpace(prevTurn.TimeWindow)
+		case hasFocus && strings.TrimSpace(focus.timeWindow) != "" && strings.TrimSpace(focus.timeWindow) != "none":
+			resolved.Turn.TimeWindow = strings.TrimSpace(focus.timeWindow)
+		}
+	}
+	resolved.Turn.NeedsClarification = false
+	resolved.Turn.ClarificationFocus = "none"
+	resolved.Turn.ClarificationPrompt = ""
+	return resolved
 }
 
 func shouldDeferMissingReferenceClarification(resolved resolvedTurnContext, history []agent.Message) bool {
@@ -400,6 +604,7 @@ Additional comparison-followup rules:
 }
 
 func sanitizeNormalizedTurn(msg string, turn normalizedTurn) normalizedTurn {
+	turn.RawMessage = strings.TrimSpace(msg)
 	turn.Intent = normalizeEnum(strings.ToLower(strings.TrimSpace(turn.Intent)), "other",
 		"album_discovery", "track_discovery", "artist_discovery", "scene_discovery", "listening", "stats", "playlist", "general_chat", "other",
 	)
@@ -432,6 +637,7 @@ func sanitizeNormalizedTurn(msg string, turn normalizedTurn) normalizedTurn {
 	turn.ArtistName = compactText(strings.TrimSpace(turn.ArtistName), 160)
 	turn.TrackTitle = compactText(strings.TrimSpace(turn.TrackTitle), 180)
 	turn.PromptHint = compactText(strings.TrimSpace(turn.PromptHint), 220)
+	sanitizeOwnershipConstraintEntities(msg, &turn)
 	turn.ClarificationFocus = normalizeEnum(strings.ToLower(strings.TrimSpace(turn.ClarificationFocus)), "none",
 		"none", "scope", "time_window", "target_type", "reference", "other",
 	)
@@ -504,6 +710,12 @@ func sanitizeNormalizedTurn(msg string, turn normalizedTurn) normalizedTurn {
 	}
 
 	inferDefaultQueryScope(&turn)
+
+	if shouldClarifyStatsScope(msg, turn) {
+		turn.NeedsClarification = true
+		turn.ClarificationFocus = "scope"
+		turn.ClarificationPrompt = "Do you want library stats or listening stats?"
+	}
 
 	if turn.SubIntent == "" {
 		switch {
@@ -594,6 +806,49 @@ func sanitizeNormalizedTurn(msg string, turn normalizedTurn) normalizedTurn {
 	return turn
 }
 
+func sanitizeOwnershipConstraintEntities(msg string, turn *normalizedTurn) {
+	if turn == nil {
+		return
+	}
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	if lower == "" || !containsLibraryOwnershipCue(lower) {
+		return
+	}
+	switch strings.TrimSpace(turn.SubIntent) {
+	case "artist_similarity", "artist_starting_album", "track_similarity", "artist_remove", "playlist_artist_coverage":
+		return
+	}
+	if isOwnershipConstraintPhrase(turn.ArtistName) {
+		turn.ArtistName = ""
+	}
+	if isOwnershipConstraintPhrase(turn.TrackTitle) {
+		turn.TrackTitle = ""
+	}
+}
+
+func isOwnershipConstraintPhrase(value string) bool {
+	value = normalizeReferenceText(value)
+	if value == "" {
+		return false
+	}
+	switch value {
+	case normalizeReferenceText("i already have"),
+		normalizeReferenceText("already have"),
+		normalizeReferenceText("what i already have"),
+		normalizeReferenceText("what i have"),
+		normalizeReferenceText("i have"),
+		normalizeReferenceText("my library"),
+		normalizeReferenceText("my collection"),
+		normalizeReferenceText("my records"),
+		normalizeReferenceText("my albums"),
+		normalizeReferenceText("albums i already have"),
+		normalizeReferenceText("records i already have"):
+		return true
+	default:
+		return false
+	}
+}
+
 func messageImpliesRecentWindow(msg string) bool {
 	lower := strings.ToLower(strings.TrimSpace(msg))
 	if lower == "" {
@@ -606,6 +861,34 @@ func messageImpliesRecentWindow(msg string) bool {
 		strings.Contains(lower, "lately") ||
 		strings.Contains(lower, "these days") ||
 		strings.Contains(lower, "of late")
+}
+
+func shouldClarifyStatsScope(msg string, turn normalizedTurn) bool {
+	if strings.TrimSpace(turn.Intent) != "stats" || turn.NeedsClarification {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	if lower == "" {
+		return false
+	}
+	if !strings.Contains(lower, "stats") {
+		return false
+	}
+	if turn.TimeWindow != "none" {
+		return false
+	}
+	if containsLibraryOwnershipCue(lower) {
+		return false
+	}
+	if strings.Contains(lower, "listen") ||
+		strings.Contains(lower, "played") ||
+		strings.Contains(lower, "plays") ||
+		strings.Contains(lower, "top artists") ||
+		strings.Contains(lower, "dominant") ||
+		strings.Contains(lower, "dominance") {
+		return false
+	}
+	return true
 }
 
 func inferDefaultQueryScope(turn *normalizedTurn) {
@@ -635,6 +918,7 @@ func resolveTurnContext(sessionID string, turn normalizedTurn) resolvedTurnConte
 	resolved := resolvedTurnContext{Turn: turn}
 	memory := loadTurnSessionMemory(sessionID)
 	memory.applyToResolvedTurnContext(&resolved)
+	applyConversationObjectContext(memory, &resolved)
 	if resolved.Turn.Intent == "album_discovery" && resolved.Turn.ResultAction != "" && resolved.Turn.ResultAction != "none" && (resolved.Turn.ResultSetKind == "" || resolved.Turn.ResultSetKind == "none") && resolved.HasDiscoveredAlbums {
 		resolved.Turn.ResultSetKind = "discovered_albums"
 	}
@@ -728,7 +1012,364 @@ func resolveTurnContext(sessionID string, turn normalizedTurn) resolvedTurnConte
 }
 
 func (r resolvedTurnContext) hasReferenceContext() bool {
-	return r.HasCreativeAlbumSet || r.HasSemanticAlbumSet || r.HasDiscoveredAlbums || r.HasCleanupCandidates || r.HasBadlyRatedAlbums || r.HasRecentListening || r.HasPendingPlaylistPlan || r.HasResolvedScene || r.HasSongPath || r.HasTrackCandidates || r.HasArtistCandidates
+	return r.HasActiveFocus || r.HasCreativeAlbumSet || r.HasSemanticAlbumSet || r.HasDiscoveredAlbums || r.HasCleanupCandidates || r.HasBadlyRatedAlbums || r.HasRecentListening || r.HasPendingPlaylistPlan || r.HasResolvedScene || r.HasSongPath || r.HasTrackCandidates || r.HasArtistCandidates
+}
+
+func applyConversationObjectContext(memory turnSessionMemory, resolved *resolvedTurnContext) {
+	if resolved == nil || !resolved.HasConversationObject {
+		return
+	}
+	turn := &resolved.Turn
+	objectKind := strings.TrimSpace(resolved.ConversationObjectKind)
+	objectTarget := strings.TrimSpace(resolved.ConversationObjectTarget)
+
+	applyConversationObjectDefaults(turn, memory.activeFocus)
+	normalizeConversationObjectFollowup(turn, memory.activeFocus, objectTarget)
+	if turn.FollowupMode != "none" {
+		if strings.TrimSpace(turn.ReferenceTarget) == "" || strings.TrimSpace(turn.ReferenceTarget) == "none" {
+			if objectTarget == "" {
+				objectTarget = "previous_results"
+			}
+			turn.ReferenceTarget = objectTarget
+		}
+	}
+
+	inheritActiveFocusConstraints(turn, memory.activeFocus)
+	if strings.TrimSpace(turn.ConversationOp) == "" && objectKind != "" && objectKind != "library_inventory_lookup" {
+		inspectionLike := strings.TrimSpace(turn.SubIntent) == "result_set_play_recency" ||
+			strings.TrimSpace(turn.SubIntent) == "result_set_most_recent" ||
+			strings.TrimSpace(turn.ResultAction) == "inspect_availability" ||
+			(strings.TrimSpace(turn.TimeWindow) != "" && strings.TrimSpace(turn.TimeWindow) != "none")
+		if !inspectionLike && turn.LibraryOnly != nil && *turn.LibraryOnly && (!memory.activeFocus.libraryOnlySet || !memory.activeFocus.libraryOnly) {
+			turn.ConversationOp = "constrain"
+		} else if !inspectionLike && strings.TrimSpace(turn.QueryScope) == "library" && strings.TrimSpace(memory.activeFocus.queryScope) != "library" &&
+			strings.TrimSpace(memory.activeFocus.preferredIntent) == "album_discovery" {
+			turn.ConversationOp = "constrain"
+		}
+	}
+	normalizeConversationObjectFollowup(turn, memory.activeFocus, objectTarget)
+	if strings.TrimSpace(turn.ArtistName) == "" {
+		if artistName, ok := inferConversationObjectArtistName(memory, objectKind, turn.RawMessage); ok {
+			turn.ArtistName = artistName
+		}
+	}
+
+	if strings.TrimSpace(turn.ReferenceTarget) == "previous_results" &&
+		strings.TrimSpace(turn.FollowupMode) != "none" &&
+		objectKind != "" && objectKind != "library_inventory_lookup" &&
+		strings.TrimSpace(turn.ResultSetKind) != objectKind {
+		turn.ResultSetKind = objectKind
+	}
+	if (strings.TrimSpace(turn.ResultSetKind) == "" || strings.TrimSpace(turn.ResultSetKind) == "none") &&
+		turn.ReferenceTarget != "none" && objectKind != "" && objectKind != "library_inventory_lookup" {
+		turn.ResultSetKind = objectKind
+	}
+	if (strings.TrimSpace(turn.Intent) == "" || strings.TrimSpace(turn.Intent) == "other" || strings.TrimSpace(turn.Intent) == "general_chat") &&
+		strings.TrimSpace(resolved.ConversationObjectIntent) != "" {
+		turn.Intent = strings.TrimSpace(resolved.ConversationObjectIntent)
+	}
+	if turn.ReferenceTarget == "previous_results" && resolved.ResolvedReferenceKind == "" && objectKind != "" && objectKind != "library_inventory_lookup" {
+		resolved.ResolvedReferenceKind = objectKind
+		resolved.ResolvedReferenceSource = "conversation_object"
+	}
+}
+
+func applyConversationObjectDefaults(turn *normalizedTurn, object conversationObjectState) {
+	if turn == nil {
+		return
+	}
+	weakIntent := strings.TrimSpace(turn.Intent) == "" ||
+		strings.TrimSpace(turn.Intent) == "other" ||
+		strings.TrimSpace(turn.Intent) == "general_chat"
+	if strings.TrimSpace(object.objectType) == "empty_result" && strings.TrimSpace(object.preferredAction) != "" {
+		shouldUseObject := weakIntent ||
+			strings.TrimSpace(turn.Intent) == "playlist" ||
+			strings.TrimSpace(turn.ReferenceTarget) == "previous_results" ||
+			strings.TrimSpace(turn.FollowupMode) != "none"
+		if shouldUseObject {
+			if weakIntent || strings.TrimSpace(turn.Intent) == "playlist" {
+				if intent := strings.TrimSpace(object.preferredIntent); intent != "" {
+					turn.Intent = intent
+				}
+				if subIntent := strings.TrimSpace(object.preferredSubIntent); subIntent != "" {
+					turn.SubIntent = subIntent
+				}
+			}
+			if strings.TrimSpace(turn.SubIntent) == "" {
+				if subIntent := strings.TrimSpace(object.preferredSubIntent); subIntent != "" {
+					turn.SubIntent = subIntent
+				}
+			}
+			if action := strings.TrimSpace(object.preferredAction); action != "" {
+				turn.ResultAction = action
+			}
+			if op := strings.TrimSpace(object.preferredOp); op != "" {
+				turn.ConversationOp = op
+			}
+			turn.ResultSetKind = strings.TrimSpace(object.kind)
+			turn.NeedsClarification = false
+			turn.ClarificationFocus = "none"
+			turn.ClarificationPrompt = ""
+		}
+	}
+}
+
+func inheritActiveFocusConstraints(turn *normalizedTurn, focus activeFocusState) {
+	if turn == nil {
+		return
+	}
+	if !shouldInheritActiveFocusConstraints(*turn) {
+		return
+	}
+	if turn.LibraryOnly == nil && focus.libraryOnlySet {
+		libraryOnly := focus.libraryOnly
+		turn.LibraryOnly = &libraryOnly
+	}
+	if strings.TrimSpace(turn.QueryScope) == "" || strings.TrimSpace(turn.QueryScope) == "unknown" ||
+		(strings.TrimSpace(turn.QueryScope) == "general" && focus.libraryOnlySet && focus.libraryOnly) {
+		if scope := strings.TrimSpace(focus.queryScope); scope != "" {
+			turn.QueryScope = scope
+		}
+	}
+	if strings.TrimSpace(turn.ArtistName) == "" {
+		if artist := strings.TrimSpace(focus.artistName); artist != "" {
+			turn.ArtistName = artist
+		}
+	}
+	if (strings.TrimSpace(turn.TimeWindow) == "" || strings.TrimSpace(turn.TimeWindow) == "none") &&
+		strings.TrimSpace(focus.timeWindow) != "" && strings.TrimSpace(focus.timeWindow) != "none" {
+		turn.TimeWindow = strings.TrimSpace(focus.timeWindow)
+	}
+	if strings.TrimSpace(turn.PromptHint) == "" {
+		if hint := strings.TrimSpace(focus.promptHint); hint != "" {
+			turn.PromptHint = hint
+		}
+	}
+}
+
+func shouldInheritActiveFocusConstraints(turn normalizedTurn) bool {
+	if target := strings.TrimSpace(turn.ReferenceTarget); target != "" && target != "none" {
+		return true
+	}
+	if mode := strings.TrimSpace(turn.FollowupMode); mode != "" && mode != "none" {
+		return true
+	}
+	if op := strings.TrimSpace(turn.ConversationOp); op != "" && op != "none" {
+		return true
+	}
+	if kind := strings.TrimSpace(turn.ResultSetKind); kind != "" && kind != "none" {
+		return true
+	}
+	return false
+}
+
+func deriveConversationObjectOperation(turn normalizedTurn) string {
+	switch {
+	case strings.TrimSpace(turn.FollowupMode) == "pivot":
+		return "pivot"
+	case strings.TrimSpace(turn.ResultAction) == "compare":
+		return "compare"
+	case strings.TrimSpace(turn.ResultAction) == "inspect_availability",
+		strings.TrimSpace(turn.SubIntent) == "result_set_play_recency",
+		strings.TrimSpace(turn.SubIntent) == "result_set_most_recent":
+		return "inspect"
+	case strings.TrimSpace(turn.ResultAction) == "preview_apply", strings.TrimSpace(turn.ResultAction) == "apply_confirmed":
+		return "apply"
+	case strings.TrimSpace(turn.SubIntent) == "creative_refinement",
+		strings.TrimSpace(turn.FollowupMode) == "refine_previous":
+		return "refine"
+	case strings.TrimSpace(turn.SelectionMode) != "" && strings.TrimSpace(turn.SelectionMode) != "none",
+		strings.TrimSpace(turn.ReferenceQualifier) == "last_item":
+		return "select"
+	case strings.TrimSpace(turn.FollowupMode) != "" && strings.TrimSpace(turn.FollowupMode) != "none":
+		return "query"
+	default:
+		return ""
+	}
+}
+
+func applyConversationObjectDecision(turn normalizedTurn, object conversationObjectState, decision conversationObjectDecision) normalizedTurn {
+	if !decision.UseActiveObject {
+		return turn
+	}
+	if mode := strings.TrimSpace(decision.FollowupMode); mode != "" && mode != "none" {
+		turn.FollowupMode = mode
+	}
+	if target := strings.TrimSpace(decision.ReferenceTarget); target != "" && target != "none" {
+		turn.ReferenceTarget = target
+	}
+	if op := strings.TrimSpace(decision.ConversationOp); op != "" && op != "none" {
+		turn.ConversationOp = op
+	}
+	if kind := strings.TrimSpace(decision.ResultSetKind); kind != "" && kind != "none" {
+		turn.ResultSetKind = kind
+	}
+	if intent := strings.TrimSpace(decision.IntentOverride); intent != "" && intent != "none" {
+		turn.Intent = intent
+	}
+	if subIntent := strings.TrimSpace(decision.SubIntentOverride); subIntent != "" && subIntent != "none" {
+		turn.SubIntent = subIntent
+	}
+	if scope := strings.TrimSpace(decision.QueryScopeOverride); scope != "" && scope != "none" {
+		turn.QueryScope = scope
+	}
+	if selectionMode := strings.TrimSpace(decision.SelectionMode); selectionMode != "" && selectionMode != "none" {
+		turn.SelectionMode = selectionMode
+	}
+	if selectionValue := strings.TrimSpace(decision.SelectionValue); selectionValue != "" {
+		turn.SelectionValue = selectionValue
+	}
+	if decision.NeedsClarification {
+		turn.NeedsClarification = true
+		turn.ClarificationPrompt = strings.TrimSpace(decision.ClarificationPrompt)
+		turn.ClarificationFocus = strings.TrimSpace(decision.ClarificationFocus)
+	}
+	return applyStructuralConversationFallback(turn, object)
+}
+
+func applyStructuralConversationFallback(turn normalizedTurn, object conversationObjectState) normalizedTurn {
+	if strings.TrimSpace(turn.ConversationOp) == "" {
+		turn.ConversationOp = deriveConversationObjectOperation(turn)
+	}
+	if strings.TrimSpace(turn.ConversationOp) == "" &&
+		turn.LibraryOnly != nil && *turn.LibraryOnly &&
+		object.libraryOnlySet && !object.libraryOnly {
+		turn.ConversationOp = "constrain"
+	}
+	normalizeConversationObjectFollowup(&turn, object, strings.TrimSpace(object.referenceTarget))
+	if strings.TrimSpace(turn.Intent) == "" || strings.TrimSpace(turn.Intent) == "other" || strings.TrimSpace(turn.Intent) == "general_chat" {
+		if intent := strings.TrimSpace(object.preferredIntent); intent != "" {
+			turn.Intent = intent
+		}
+	}
+	return turn
+}
+
+func normalizeConversationObjectFollowup(turn *normalizedTurn, object conversationObjectState, fallbackTarget string) {
+	if turn == nil {
+		return
+	}
+	if strings.TrimSpace(turn.ConversationOp) == "" {
+		return
+	}
+	if strings.TrimSpace(turn.FollowupMode) == "" || strings.TrimSpace(turn.FollowupMode) == "none" {
+		switch strings.TrimSpace(turn.ConversationOp) {
+		case "refine", "constrain":
+			turn.FollowupMode = "refine_previous"
+		case "query", "select", "inspect", "apply", "compare":
+			turn.FollowupMode = "query_previous_set"
+		case "pivot":
+			turn.FollowupMode = "pivot"
+		}
+	}
+	if turn.FollowupMode != "none" && (strings.TrimSpace(turn.ReferenceTarget) == "" || strings.TrimSpace(turn.ReferenceTarget) == "none") {
+		target := strings.TrimSpace(fallbackTarget)
+		if target == "" {
+			target = strings.TrimSpace(object.referenceTarget)
+		}
+		if target == "" {
+			target = "previous_results"
+		}
+		turn.ReferenceTarget = target
+	}
+}
+
+func sanitizeConversationObjectDecision(decision conversationObjectDecision) conversationObjectDecision {
+	decision.FollowupMode = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.FollowupMode)), "none",
+		"none", "refine_previous", "query_previous_set", "pivot",
+	)
+	decision.ReferenceTarget = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.ReferenceTarget)), "none",
+		"none", "previous_results", "previous_taste", "previous_playlist", "previous_stats",
+	)
+	decision.ConversationOp = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.ConversationOp)), "none",
+		"none", "query", "refine", "constrain", "select", "inspect", "apply", "compare", "pivot",
+	)
+	decision.IntentOverride = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.IntentOverride)), "none",
+		"album_discovery", "track_discovery", "artist_discovery", "scene_discovery", "listening", "stats", "playlist", "general_chat", "other", "none",
+	)
+	decision.SubIntentOverride = compactText(strings.TrimSpace(decision.SubIntentOverride), 80)
+	decision.QueryScopeOverride = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.QueryScopeOverride)), "none",
+		"general", "library", "listening", "stats", "playlist", "unknown", "none",
+	)
+	decision.ResultSetKind = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.ResultSetKind)), "none",
+		"none", "creative_albums", "semantic_albums", "discovered_albums", "cleanup_candidates", "badly_rated_albums", "playlist_candidates", "recent_listening", "scene_candidates", "song_path", "track_candidates", "artist_candidates",
+	)
+	decision.SelectionMode = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.SelectionMode)), "none",
+		"none", "all", "top_n", "ordinal", "explicit_names", "missing_only", "count_match",
+	)
+	if strings.TrimSpace(decision.SelectionMode) == "none" {
+		decision.SelectionValue = ""
+	} else {
+		decision.SelectionValue = compactText(strings.TrimSpace(decision.SelectionValue), 80)
+	}
+	decision.ClarificationPrompt = compactText(strings.TrimSpace(decision.ClarificationPrompt), 220)
+	decision.ClarificationFocus = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.ClarificationFocus)), "none",
+		"none", "scope", "time_window", "target_type", "reference", "other",
+	)
+	decision.Confidence = normalizeEnum(strings.ToLower(strings.TrimSpace(decision.Confidence)), "medium",
+		"low", "medium", "high",
+	)
+	if !decision.NeedsClarification {
+		decision.ClarificationPrompt = ""
+		decision.ClarificationFocus = "none"
+	}
+	return decision
+}
+
+func renderNormalizedTurn(turn normalizedTurn) string {
+	payload, err := json.Marshal(turnToNormalized(turn))
+	if err != nil {
+		return "none"
+	}
+	return string(payload)
+}
+
+func renderConversationObjectDecisionContext(object conversationObjectState) string {
+	parts := []string{
+		"type=" + strings.TrimSpace(object.objectType),
+		"kind=" + strings.TrimSpace(object.kind),
+		"status=" + strings.TrimSpace(object.status),
+	}
+	if intent := strings.TrimSpace(object.preferredIntent); intent != "" {
+		parts = append(parts, "intent="+intent)
+	}
+	if subIntent := strings.TrimSpace(object.preferredSubIntent); subIntent != "" {
+		parts = append(parts, "subIntent="+subIntent)
+	}
+	if action := strings.TrimSpace(object.preferredAction); action != "" {
+		parts = append(parts, "action="+action)
+	}
+	if op := strings.TrimSpace(object.preferredOp); op != "" {
+		parts = append(parts, "op="+op)
+	}
+	if scope := strings.TrimSpace(object.queryScope); scope != "" {
+		parts = append(parts, "scope="+scope)
+	}
+	if target := strings.TrimSpace(object.referenceTarget); target != "" {
+		parts = append(parts, "target="+target)
+	}
+	if object.libraryOnlySet {
+		parts = append(parts, fmt.Sprintf("libraryOnly=%t", object.libraryOnly))
+	}
+	if artist := strings.TrimSpace(object.artistName); artist != "" {
+		parts = append(parts, fmt.Sprintf("artist=%q", artist))
+	}
+	if window := strings.TrimSpace(object.timeWindow); window != "" && window != "none" {
+		parts = append(parts, "timeWindow="+window)
+	}
+	if hint := strings.TrimSpace(object.promptHint); hint != "" {
+		parts = append(parts, fmt.Sprintf("prompt=%q", hint))
+	}
+	if ops := conversationObjectConversationOps(object); len(ops) > 0 {
+		parts = append(parts, "conversationOps="+strings.Join(ops, ","))
+	}
+	if actions := conversationObjectResultActions(object.kind); len(actions) > 0 {
+		parts = append(parts, "resultActions="+strings.Join(actions, ","))
+	}
+	if selectors := conversationObjectSelectors(object.kind); len(selectors) > 0 {
+		parts = append(parts, "selectors="+strings.Join(selectors, ","))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (s *Server) tryNormalizedClarification(msg string, resolved *resolvedTurnContext) (string, bool) {

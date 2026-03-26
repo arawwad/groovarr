@@ -155,6 +155,9 @@ func TestBuildLLMSessionContextIncludesCreativeAlbumSet(t *testing.T) {
 	if !strings.Contains(got, "last_creative_album_set") {
 		t.Fatalf("buildLLMSessionContext() = %q", got)
 	}
+	if !strings.Contains(got, "active_conversation_object") {
+		t.Fatalf("buildLLMSessionContext() = %q", got)
+	}
 	if !strings.Contains(got, "Teachings in Silence by Ulver (2002)") {
 		t.Fatalf("buildLLMSessionContext() = %q", got)
 	}

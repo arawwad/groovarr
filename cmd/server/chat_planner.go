@@ -126,6 +126,63 @@ func sanitizeOrchestrationDecision(decision orchestrationDecision, resolved *res
 				decision.DeterministicMode = "normalized_first"
 			}
 		}
+		if !resolved.Turn.NeedsClarification &&
+			strings.TrimSpace(resolved.Turn.Intent) == "album_discovery" &&
+			strings.TrimSpace(resolved.Turn.QueryScope) == "library" &&
+			strings.TrimSpace(resolved.Turn.FollowupMode) == "none" &&
+			buildStructuredCreativeLibraryQuery(resolved.Turn) != "" {
+			decision.NextStage = "deterministic"
+			decision.DeterministicMode = "normalized_first"
+		}
+		if !resolved.Turn.NeedsClarification &&
+			strings.TrimSpace(resolved.Turn.Intent) == "album_discovery" &&
+			strings.TrimSpace(resolved.Turn.QueryScope) != "library" &&
+			strings.TrimSpace(resolved.Turn.FollowupMode) == "none" &&
+			(strings.TrimSpace(resolved.Turn.ResultAction) == "" || strings.TrimSpace(resolved.Turn.ResultAction) == "none") {
+			decision.NextStage = "deterministic"
+			decision.DeterministicMode = "normalized_first"
+		}
+		if !resolved.Turn.NeedsClarification &&
+			strings.TrimSpace(resolved.Turn.Intent) == "playlist" &&
+			strings.TrimSpace(resolved.Turn.FollowupMode) == "none" &&
+			(strings.TrimSpace(resolved.Turn.TargetName) == "" || strings.TrimSpace(resolved.Turn.SubIntent) == "playlist_vibe") {
+			decision.NextStage = "deterministic"
+			decision.DeterministicMode = "normalized_first"
+		}
+		if strings.TrimSpace(resolved.Turn.ResultSetKind) == "artist_candidates" &&
+			strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" &&
+			isArtistAlbumFollowUpPrompt(strings.ToLower(strings.TrimSpace(resolved.Turn.RawMessage))) &&
+			!resolved.Turn.NeedsClarification {
+			decision.NextStage = "deterministic"
+			decision.DeterministicMode = "normalized_first"
+		}
+		if !resolved.Turn.NeedsClarification &&
+			strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" &&
+			(strings.TrimSpace(resolved.ResolvedReferenceKind) == "artist_candidates" ||
+				strings.TrimSpace(resolved.Turn.ResultSetKind) == "artist_candidates") &&
+			strings.TrimSpace(resolved.Turn.SelectionMode) != "" &&
+			strings.TrimSpace(resolved.Turn.SelectionMode) != "none" &&
+			strings.TrimSpace(resolved.Turn.ResultAction) != "compare" {
+			decision.NextStage = "deterministic"
+			decision.DeterministicMode = "normalized_first"
+		}
+		if decision.NextStage != "resolver" &&
+			resolved.Turn.FollowupMode != "none" &&
+			strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" &&
+			!resolved.Turn.NeedsClarification &&
+			(strings.TrimSpace(resolved.ResolvedReferenceKind) != "" ||
+				(strings.TrimSpace(resolved.Turn.ResultSetKind) != "" && strings.TrimSpace(resolved.Turn.ResultSetKind) != "none")) {
+			decision.NextStage = "deterministic"
+			decision.DeterministicMode = "normalized_first"
+		}
+		if strings.TrimSpace(resolved.Turn.ConversationOp) == "constrain" &&
+			strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" &&
+			!resolved.Turn.NeedsClarification &&
+			(strings.TrimSpace(resolved.ResolvedReferenceKind) != "" ||
+				(strings.TrimSpace(resolved.Turn.ResultSetKind) != "" && strings.TrimSpace(resolved.Turn.ResultSetKind) != "none")) {
+			decision.NextStage = "deterministic"
+			decision.DeterministicMode = "normalized_first"
+		}
 		if strings.TrimSpace(resolved.Turn.ResultAction) == "compare" && strings.TrimSpace(resolved.Turn.ReferenceTarget) == "previous_results" {
 			decision.NextStage = "resolver"
 			decision.DeterministicMode = "none"

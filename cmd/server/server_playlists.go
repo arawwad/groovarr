@@ -14,7 +14,7 @@ import (
 func playlistCandidateResultSetCapability() resultSetCapability {
 	return resultSetCapability{
 		SetKind:    "playlist_candidates",
-		Operations: []string{"inspect_availability"},
+		Operations: []string{"inspect_availability", "refine_style"},
 		Selectors:  []string{"all", "top_n", "item_key"},
 	}
 }
@@ -122,6 +122,18 @@ func (s *Server) handleStructuredSavedPlaylistAppend(ctx context.Context, resolv
 
 func (s *Server) handleStructuredSavedPlaylistAppendTurn(ctx context.Context, turn *Turn, history []agent.Message) (ChatResponse, bool) {
 	return s.handleStructuredSavedPlaylistAppend(ctx, turnToResolvedTurnContext(turn), history)
+}
+
+func (s *Server) handleStructuredPendingPlaylistDraftRefinement(ctx context.Context, resolved *resolvedTurnContext) (ChatResponse, bool) {
+	playlistName, prompt, trackCount, ok := resolvePendingPlaylistDraftRefinement(chatSessionIDFromContext(ctx), resolved)
+	if !ok {
+		return ChatResponse{}, false
+	}
+	response, pendingAction, err := s.startPlaylistCreatePreview(ctx, playlistName, prompt, trackCount)
+	if err != nil {
+		return ChatResponse{Response: err.Error()}, true
+	}
+	return ChatResponse{Response: response, PendingAction: pendingAction}, true
 }
 
 func (s *Server) resolveStructuredSavedPlaylistAppendOutcome(ctx context.Context, resolved *resolvedTurnContext, history []agent.Message) (playlistWorkflowOutcome, bool) {
@@ -247,10 +259,6 @@ func (s *Server) handleStructuredPlaylistAvailability(ctx context.Context, resol
 	return renderStructuredPlaylistAvailability(outcome)
 }
 
-func (s *Server) handleStructuredPlaylistAvailabilityTurn(ctx context.Context, turn *Turn) (string, bool) {
-	return s.handleStructuredPlaylistAvailability(ctx, turnToResolvedTurnContext(turn))
-}
-
 func (s *Server) resolveStructuredPlaylistAvailabilityOutcome(ctx context.Context, resolved *resolvedTurnContext) (playlistAvailabilityOutcome, bool) {
 	if resolved == nil {
 		return playlistAvailabilityOutcome{}, false
@@ -258,7 +266,8 @@ func (s *Server) resolveStructuredPlaylistAvailabilityOutcome(ctx context.Contex
 	turn := resolved.Turn
 	ref := resolved.resultReference()
 	if strings.TrimSpace(turn.SubIntent) != "playlist_availability" &&
-		!(ref.effectiveSetKind() == "playlist_candidates" && ref.Action == "inspect_availability") {
+		!(ref.effectiveSetKind() == "playlist_candidates" && ref.Action == "inspect_availability") &&
+		!(playlistConversationObjectKind(resolved) == "playlist_candidates" && strings.TrimSpace(turn.ConversationOp) == "inspect") {
 		return playlistAvailabilityOutcome{}, false
 	}
 
@@ -409,6 +418,73 @@ func (s *Server) resolveStructuredPlaylistTarget(ctx context.Context, turn norma
 		return s.currentPlaylistNameFromHistory(history)
 	}
 	return "", false
+}
+
+func resolvePendingPlaylistDraftRefinement(sessionID string, resolved *resolvedTurnContext) (string, string, int, bool) {
+	if resolved == nil {
+		return "", "", 0, false
+	}
+	turn := resolved.Turn
+	if !isStructuredPlaylistDraftRefinementTurn(turn) {
+		return "", "", 0, false
+	}
+	if strings.TrimSpace(turn.FollowupMode) == "" || strings.TrimSpace(turn.FollowupMode) == "none" {
+		return "", "", 0, false
+	}
+	if !resolved.HasPendingPlaylistPlan {
+		return "", "", 0, false
+	}
+	basePrompt, playlistName, plannedAt, candidates, _, _, ok := loadTurnSessionMemory(sessionID).PlaylistContext()
+	if !ok || plannedAt.IsZero() || len(candidates) == 0 || time.Since(plannedAt) > 30*time.Minute {
+		return "", "", 0, false
+	}
+	promptHint := refinementPromptHint(turn, basePrompt)
+	if promptHint == "" {
+		return "", "", 0, false
+	}
+	return playlistName, mergePlaylistDraftPrompt(basePrompt, promptHint), len(candidates), true
+}
+
+func isStructuredPlaylistDraftRefinementTurn(turn normalizedTurn) bool {
+	switch strings.TrimSpace(turn.ConversationOp) {
+	case "refine", "constrain":
+		return true
+	}
+	if strings.TrimSpace(turn.ResultAction) == "refine_style" {
+		return true
+	}
+	return strings.TrimSpace(turn.Intent) == "playlist" && strings.TrimSpace(turn.SubIntent) == "creative_refinement"
+}
+
+func refinementPromptHint(turn normalizedTurn, basePrompt string) string {
+	promptHint := strings.TrimSpace(turn.PromptHint)
+	styleHint := strings.TrimSpace(strings.Join(turn.StyleHints, " "))
+	basePrompt = strings.TrimSpace(basePrompt)
+	if promptHint == "" {
+		return styleHint
+	}
+	if styleHint == "" {
+		return promptHint
+	}
+	if basePrompt != "" && strings.EqualFold(promptHint, basePrompt) {
+		return styleHint
+	}
+	return promptHint
+}
+
+func mergePlaylistDraftPrompt(basePrompt, refinement string) string {
+	basePrompt = strings.TrimSpace(basePrompt)
+	refinement = strings.TrimSpace(refinement)
+	switch {
+	case basePrompt == "":
+		return refinement
+	case refinement == "":
+		return basePrompt
+	case strings.EqualFold(basePrompt, refinement):
+		return basePrompt
+	default:
+		return basePrompt + ". Refine it to be " + refinement + "."
+	}
 }
 
 func structuredPlaylistTrackCount(turn normalizedTurn, fallback int) int {

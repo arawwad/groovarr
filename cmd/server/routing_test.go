@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"groovarr/graph"
 	"groovarr/internal/agent"
 	"groovarr/internal/discovery"
+	"groovarr/internal/similarity"
 )
 
 func boolPtr(v bool) *bool { return &v }
@@ -59,6 +61,83 @@ func TestExtractArtistAlbumCountNamesSingleSubjectBeforeAlbums(t *testing.T) {
 	want := []string{"Pink Floyd"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Fatalf("names = %#v, want %#v", names, want)
+	}
+}
+
+func TestExtractLibraryLookupQuery(t *testing.T) {
+	got := extractLibraryLookupQuery("Do I have Heart-Shaped Box by Nirvana in my library?")
+	if got != "Heart-Shaped Box by Nirvana" {
+		t.Fatalf("extractLibraryLookupQuery() = %q", got)
+	}
+}
+
+func TestExtractInventoryLookupContinuationQuery(t *testing.T) {
+	got := extractInventoryLookupContinuationQuery("What about The Bends by Radiohead?")
+	if got != "The Bends by Radiohead" {
+		t.Fatalf("extractInventoryLookupContinuationQuery() = %q", got)
+	}
+}
+
+func TestIsArtistAlbumFollowUpPromptRecognizesRevisitWithoutAlbumWord(t *testing.T) {
+	if !isArtistAlbumFollowUpPrompt("from those, give me two to revisit tonight") {
+		t.Fatal("expected revisit follow-up to bind to prior artist candidates")
+	}
+	if isArtistAlbumFollowUpPrompt("which of those have i played recently") {
+		t.Fatal("did not expect recent-listening follow-up to be treated as artist album revisit")
+	}
+}
+
+func TestArtistAlbumFollowUpRequestedCount(t *testing.T) {
+	if count, ok := artistAlbumFollowUpRequestedCount("from those, give me two to revisit tonight"); !ok || count != 2 {
+		t.Fatalf("artistAlbumFollowUpRequestedCount() = %d, %v, want 2, true", count, ok)
+	}
+	if count, ok := artistAlbumFollowUpRequestedCount("pick 3 albums from those"); !ok || count != 3 {
+		t.Fatalf("artistAlbumFollowUpRequestedCount() = %d, %v, want 3, true", count, ok)
+	}
+	if count, ok := artistAlbumFollowUpRequestedCount("give me the second one"); ok || count != 0 {
+		t.Fatalf("artistAlbumFollowUpRequestedCount() = %d, %v, want 0, false", count, ok)
+	}
+}
+
+func TestFindExactTrackLookupMatch(t *testing.T) {
+	match, ok := findExactTrackLookupMatch("Heart-Shaped Box", "Nirvana", []trackCandidate{
+		{Title: "Heart-Shaped Box", ArtistName: "Nirvana"},
+		{Title: "Heart-Shaped Box", ArtistName: "Something Else"},
+	})
+	if !ok {
+		t.Fatal("expected exact track match to resolve")
+	}
+	if match.ArtistName != "Nirvana" {
+		t.Fatalf("match = %#v", match)
+	}
+}
+
+func TestFindExactAlbumLookupMatch(t *testing.T) {
+	match, ok := findExactAlbumLookupMatch("The Dark Side of the Moon", "Pink Floyd", []albumLookupCandidate{
+		{Title: "The Dark Side of the Moon", ArtistName: "Pink Floyd", Year: 1973},
+		{Title: "The Dark Side of the Moon", ArtistName: "Unknown"},
+	})
+	if !ok {
+		t.Fatal("expected exact album match to resolve")
+	}
+	if match.ArtistName != "Pink Floyd" || match.Year != 1973 {
+		t.Fatalf("match = %#v", match)
+	}
+}
+
+func TestParseArtistAlbumCandidates(t *testing.T) {
+	candidates, ok := parseArtistAlbumCandidates(`{"data":{"albums":[{"name":"Honeymoon","artistName":"Lana Del Rey","year":2015,"genre":"dream pop","playCount":2,"lastPlayed":"2026-03-01T12:00:00Z"}]}}`)
+	if !ok {
+		t.Fatal("expected parseArtistAlbumCandidates to succeed")
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("len(candidates) = %d, want 1", len(candidates))
+	}
+	if candidates[0].Name != "Honeymoon" || candidates[0].ArtistName != "Lana Del Rey" {
+		t.Fatalf("candidate = %#v", candidates[0])
+	}
+	if candidates[0].Year != 2015 || candidates[0].PlayCount != 2 || candidates[0].LastPlayed != "2026-03-01T12:00:00Z" {
+		t.Fatalf("candidate metadata = %#v", candidates[0])
 	}
 }
 
@@ -246,6 +325,119 @@ func TestSanitizeOrchestrationDecisionRoutesCompareToResolver(t *testing.T) {
 	}
 	if decision.DeterministicMode != "none" {
 		t.Fatalf("DeterministicMode = %q, want none", decision.DeterministicMode)
+	}
+}
+
+func TestSanitizeOrchestrationDecisionBiasesResolvedFollowupRouting(t *testing.T) {
+	decision := sanitizeOrchestrationDecision(orchestrationDecision{
+		NextStage: "clarify",
+	}, &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:          "listening",
+			FollowupMode:    "query_previous_set",
+			ReferenceTarget: "previous_results",
+			ResultSetKind:   "artist_candidates",
+		},
+		ResolvedReferenceKind: "artist_candidates",
+	})
+	if decision.NextStage != "deterministic" {
+		t.Fatalf("NextStage = %q, want deterministic", decision.NextStage)
+	}
+	if decision.DeterministicMode != "normalized_first" {
+		t.Fatalf("DeterministicMode = %q, want normalized_first", decision.DeterministicMode)
+	}
+}
+
+func TestSanitizeOrchestrationDecisionBiasesFirstTurnCreativeLibraryDiscovery(t *testing.T) {
+	decision := sanitizeOrchestrationDecision(orchestrationDecision{
+		NextStage: "resolver",
+	}, &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:       "album_discovery",
+			SubIntent:    "creative_refinement",
+			FollowupMode: "none",
+			QueryScope:   "library",
+			LibraryOnly:  boolPtr(true),
+			StyleHints:   []string{"melancholic", "dream pop"},
+		},
+	})
+	if decision.NextStage != "deterministic" {
+		t.Fatalf("NextStage = %q, want deterministic", decision.NextStage)
+	}
+	if decision.DeterministicMode != "normalized_first" {
+		t.Fatalf("DeterministicMode = %q, want normalized_first", decision.DeterministicMode)
+	}
+}
+
+func TestSanitizeOrchestrationDecisionBiasesFirstTurnGeneralAlbumDiscovery(t *testing.T) {
+	decision := sanitizeOrchestrationDecision(orchestrationDecision{
+		NextStage: "responder",
+	}, &resolvedTurnContext{
+		Turn: normalizedTurn{
+			RawMessage:    "What should I put on for a rainy late-night walk?",
+			Intent:        "album_discovery",
+			SubIntent:     "creative_refinement",
+			FollowupMode:  "none",
+			QueryScope:    "general",
+			PromptHint:    "rainy late-night walk",
+			StyleHints:    []string{"rainy", "late-night"},
+			ResultAction:  "none",
+			SelectionMode: "none",
+		},
+	})
+	if decision.NextStage != "deterministic" {
+		t.Fatalf("NextStage = %q, want deterministic", decision.NextStage)
+	}
+	if decision.DeterministicMode != "normalized_first" {
+		t.Fatalf("DeterministicMode = %q, want normalized_first", decision.DeterministicMode)
+	}
+}
+
+func TestSanitizeOrchestrationDecisionBiasesArtistCandidateRevisitFollowUp(t *testing.T) {
+	decision := sanitizeOrchestrationDecision(orchestrationDecision{
+		NextStage: "resolver",
+	}, &resolvedTurnContext{
+		Turn: normalizedTurn{
+			RawMessage:      "From those, give me two to revisit tonight.",
+			Intent:          "artist_discovery",
+			SubIntent:       "listening_summary",
+			FollowupMode:    "refine_previous",
+			ReferenceTarget: "previous_results",
+			ResultSetKind:   "artist_candidates",
+			SelectionMode:   "top_n",
+			SelectionValue:  "2",
+		},
+		ResolvedReferenceKind: "artist_candidates",
+	})
+	if decision.NextStage != "deterministic" {
+		t.Fatalf("NextStage = %q, want deterministic", decision.NextStage)
+	}
+	if decision.DeterministicMode != "normalized_first" {
+		t.Fatalf("DeterministicMode = %q, want normalized_first", decision.DeterministicMode)
+	}
+}
+
+func TestSanitizeOrchestrationDecisionBiasesMisnormalizedArtistCandidateSelection(t *testing.T) {
+	decision := sanitizeOrchestrationDecision(orchestrationDecision{
+		NextStage: "resolver",
+	}, &resolvedTurnContext{
+		Turn: normalizedTurn{
+			RawMessage:      "From those, give me two to revisit tonight.",
+			Intent:          "track_discovery",
+			SubIntent:       "result_set_most_recent",
+			FollowupMode:    "query_previous_set",
+			ReferenceTarget: "previous_results",
+			ResultSetKind:   "artist_candidates",
+			SelectionMode:   "top_n",
+			SelectionValue:  "2",
+		},
+		ResolvedReferenceKind: "artist_candidates",
+	})
+	if decision.NextStage != "deterministic" {
+		t.Fatalf("NextStage = %q, want deterministic", decision.NextStage)
+	}
+	if decision.DeterministicMode != "normalized_first" {
+		t.Fatalf("DeterministicMode = %q, want normalized_first", decision.DeterministicMode)
 	}
 }
 
@@ -438,6 +630,32 @@ func TestResolveTurnContextArtistStartingAlbumUsesPriorArtistCandidates(t *testi
 	}
 	if resolved.ResolvedReferenceKind != "artist_candidates" {
 		t.Fatalf("resolved reference kind = %q", resolved.ResolvedReferenceKind)
+	}
+	if resolved.Turn.NeedsClarification {
+		t.Fatal("expected clarification to be cleared once prior artist candidates were resolved")
+	}
+}
+
+func TestResolveTurnContextListeningFollowUpUsesPriorArtistCandidates(t *testing.T) {
+	setLastArtistCandidateSet("artist-followup-auto", "top artists last month", []artistCandidate{
+		{Name: "Radiohead", PlayCount: 12},
+		{Name: "Pink Floyd", PlayCount: 8},
+	})
+	resolved := resolveTurnContext("artist-followup-auto", normalizedTurn{
+		Intent:              "listening",
+		SubIntent:           "result_set_play_recency",
+		FollowupMode:        "query_previous_set",
+		ReferenceTarget:     "previous_results",
+		NeedsClarification:  true,
+		ClarificationFocus:  "reference",
+		ClarificationPrompt: "Which earlier results do you mean?",
+		TimeWindow:          "last_month",
+	})
+	if resolved.Turn.ResultSetKind != "artist_candidates" {
+		t.Fatalf("result set kind = %q, want artist_candidates", resolved.Turn.ResultSetKind)
+	}
+	if resolved.ResolvedReferenceKind != "artist_candidates" {
+		t.Fatalf("resolved reference kind = %q, want artist_candidates", resolved.ResolvedReferenceKind)
 	}
 	if resolved.Turn.NeedsClarification {
 		t.Fatal("expected clarification to be cleared once prior artist candidates were resolved")
@@ -1210,6 +1428,23 @@ func TestSanitizeNormalizedTurnDefaultsAmbiguousRecentListening(t *testing.T) {
 	}
 }
 
+func TestSanitizeNormalizedTurnClarifiesAmbiguousArtistStatsScope(t *testing.T) {
+	turn := sanitizeNormalizedTurn("Give me artist stats.", normalizedTurn{
+		Intent:     "stats",
+		SubIntent:  "library_top_artists",
+		QueryScope: "general",
+	})
+	if !turn.NeedsClarification {
+		t.Fatal("expected clarification to be required")
+	}
+	if turn.ClarificationFocus != "scope" {
+		t.Fatalf("ClarificationFocus = %q, want scope", turn.ClarificationFocus)
+	}
+	if turn.ClarificationPrompt != "Do you want library stats or listening stats?" {
+		t.Fatalf("ClarificationPrompt = %q", turn.ClarificationPrompt)
+	}
+}
+
 func TestSanitizeNormalizedTurnDefaultsResultSetPlayRecency(t *testing.T) {
 	turn := sanitizeNormalizedTurn("From those, which ones have I actually touched this year?", normalizedTurn{
 		Intent:          "listening",
@@ -1341,6 +1576,102 @@ func TestTryTurnIntentRouteHandlesAlbumDiscoveryRecencyFollowUp(t *testing.T) {
 		},
 		Reference: TurnReference{
 			HasCreativeAlbumSet: true,
+		},
+	}, nil)
+	if !ok {
+		t.Fatal("expected album_discovery follow-up to resolve")
+	}
+	if !containsIgnoreCase(resp.Response, "Sheer Heart Attack") {
+		t.Fatalf("response = %q, want matching album from this year", resp.Response)
+	}
+	if containsIgnoreCase(resp.Response, "That's All") {
+		t.Fatalf("response = %q, did not expect stale album in this-year response", resp.Response)
+	}
+}
+
+func TestTryTurnIntentRouteHandlesListeningRecencyFollowUpViaConversationObject(t *testing.T) {
+	lastCreativeAlbumSet.mu.Lock()
+	lastCreativeAlbumSet.sessions = make(map[string]creativeAlbumSetState)
+	lastCreativeAlbumSet.mu.Unlock()
+
+	setLastCreativeAlbumSet("session-listening-object-recency", "semantic", "moody commute", []creativeAlbumCandidate{
+		{
+			Name:       "Sheer Heart Attack",
+			ArtistName: "Queen",
+			LastPlayed: time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339),
+		},
+		{
+			Name:       "That's All",
+			ArtistName: "Mel Tormé",
+			LastPlayed: time.Now().UTC().AddDate(-2, 0, 0).Format(time.RFC3339),
+		},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, "session-listening-object-recency")
+	resp, ok := srv.tryTurnIntentRoute(ctx, &Turn{
+		SessionID:   "session-listening-object-recency",
+		UserMessage: "Which of those have I played recently?",
+		Normalized: TurnNormalized{
+			Intent:          "listening",
+			SubIntent:       "result_set_play_recency",
+			ConversationOp:  "inspect",
+			FollowupMode:    "query_previous_set",
+			QueryScope:      "library",
+			TimeWindow:      "this_year",
+			ReferenceTarget: "previous_results",
+		},
+		Reference: TurnReference{
+			ObjectType:          "result_set",
+			ObjectKind:          "creative_albums",
+			ObjectStatus:        "result_set",
+			ObjectIntent:        "album_discovery",
+			ObjectTarget:        "previous_results",
+			HasCreativeAlbumSet: true,
+		},
+	}, nil)
+	if !ok {
+		t.Fatal("expected listening follow-up to resolve through conversation object")
+	}
+	if !containsIgnoreCase(resp.Response, "Sheer Heart Attack") {
+		t.Fatalf("response = %q, want matching album from this year", resp.Response)
+	}
+	if containsIgnoreCase(resp.Response, "That's All") {
+		t.Fatalf("response = %q, did not expect stale album in this-year response", resp.Response)
+	}
+}
+
+func TestTryTurnIntentRouteHandlesAlbumDiscoveryRecencyFollowUpWithUnavailableRequestedSet(t *testing.T) {
+	lastCreativeAlbumSet.mu.Lock()
+	lastCreativeAlbumSet.sessions = make(map[string]creativeAlbumSetState)
+	lastCreativeAlbumSet.mu.Unlock()
+
+	setLastCreativeAlbumSet("session-album-discovery-recency-fallback", "semantic", "moody commute", []creativeAlbumCandidate{
+		{
+			Name:       "Sheer Heart Attack",
+			ArtistName: "Queen",
+			LastPlayed: time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339),
+		},
+		{
+			Name:       "That's All",
+			ArtistName: "Mel Tormé",
+			LastPlayed: time.Now().UTC().AddDate(-2, 0, 0).Format(time.RFC3339),
+		},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, "session-album-discovery-recency-fallback")
+	resp, ok := srv.tryTurnIntentRoute(ctx, &Turn{
+		SessionID:   "session-album-discovery-recency-fallback",
+		UserMessage: "Which of those have I played recently?",
+		Normalized: TurnNormalized{
+			Intent:          "album_discovery",
+			SubIntent:       "result_set_play_recency",
+			FollowupMode:    "query_previous_set",
+			QueryScope:      "library",
+			TimeWindow:      "this_year",
+			ResultSetKind:   "discovered_albums",
+			ReferenceTarget: "previous_results",
 		},
 	}, nil)
 	if !ok {
@@ -1613,6 +1944,489 @@ func TestResolveTurnContextInfersBadlyRatedAlbums(t *testing.T) {
 	}
 }
 
+func TestResolveTurnContextUsesActiveFocusForEmptyBadlyRatedFollowUp(t *testing.T) {
+	setLastBadlyRatedAlbums("session-badly-rated-empty-focus", nil)
+
+	resolved := resolveTurnContext("session-badly-rated-empty-focus", normalizedTurn{
+		Intent:          "playlist",
+		SubIntent:       "playlist_append",
+		FollowupMode:    "query_previous_set",
+		ReferenceTarget: "previous_results",
+		SelectionMode:   "top_n",
+		SelectionValue:  "two",
+	})
+
+	if !resolved.HasActiveFocus {
+		t.Fatal("expected active focus to be available")
+	}
+	if resolved.ActiveFocusKind != "badly_rated_albums" {
+		t.Fatalf("ActiveFocusKind = %q, want badly_rated_albums", resolved.ActiveFocusKind)
+	}
+	if resolved.Turn.Intent != "other" {
+		t.Fatalf("Intent = %q, want other", resolved.Turn.Intent)
+	}
+	if resolved.Turn.SubIntent != "badly_rated_cleanup" {
+		t.Fatalf("SubIntent = %q, want badly_rated_cleanup", resolved.Turn.SubIntent)
+	}
+	if resolved.Turn.ResultAction != "preview_apply" {
+		t.Fatalf("ResultAction = %q, want preview_apply", resolved.Turn.ResultAction)
+	}
+	if resolved.Turn.ResultSetKind != "badly_rated_albums" {
+		t.Fatalf("ResultSetKind = %q, want badly_rated_albums", resolved.Turn.ResultSetKind)
+	}
+	if resolved.ResolvedReferenceKind != "badly_rated_albums" {
+		t.Fatalf("ResolvedReferenceKind = %q, want badly_rated_albums", resolved.ResolvedReferenceKind)
+	}
+	if resolved.MissingReferenceContext {
+		t.Fatal("expected active focus to satisfy reference context")
+	}
+}
+
+func TestResolveTurnContextOverridesWrongActionForEmptyBadlyRatedObject(t *testing.T) {
+	setLastBadlyRatedAlbums("session-badly-rated-empty-action", nil)
+
+	resolved := resolveTurnContext("session-badly-rated-empty-action", normalizedTurn{
+		RawMessage:      "Pick two worth saving.",
+		Intent:          "other",
+		SubIntent:       "badly_rated_cleanup",
+		ConversationOp:  "select",
+		FollowupMode:    "refine_previous",
+		QueryScope:      "library",
+		LibraryOnly:     boolPtr(true),
+		ReferenceTarget: "previous_results",
+		ResultSetKind:   "badly_rated_albums",
+		ResultAction:    "select_candidate",
+		SelectionMode:   "top_n",
+		SelectionValue:  "2",
+	})
+
+	if resolved.Turn.ConversationOp != "apply" {
+		t.Fatalf("ConversationOp = %q, want apply", resolved.Turn.ConversationOp)
+	}
+	if resolved.Turn.ResultAction != "preview_apply" {
+		t.Fatalf("ResultAction = %q, want preview_apply", resolved.Turn.ResultAction)
+	}
+	if resolved.Turn.ResultSetKind != "badly_rated_albums" {
+		t.Fatalf("ResultSetKind = %q, want badly_rated_albums", resolved.Turn.ResultSetKind)
+	}
+	if resolved.ResolvedReferenceKind != "badly_rated_albums" {
+		t.Fatalf("ResolvedReferenceKind = %q, want badly_rated_albums", resolved.ResolvedReferenceKind)
+	}
+}
+
+func TestApplyPreviousTurnClarificationCarryoverKeepsStatsDimension(t *testing.T) {
+	sessionID := "session-stats-clarification-carryover"
+
+	lastNormalizedTurn.mu.Lock()
+	lastNormalizedTurn.sessions = make(map[string]normalizedTurnState)
+	lastNormalizedTurn.mu.Unlock()
+
+	setLastNormalizedTurn(sessionID, normalizedTurn{
+		Intent:              "stats",
+		SubIntent:           "library_top_artists",
+		QueryScope:          "stats",
+		NeedsClarification:  true,
+		ClarificationFocus:  "scope",
+		ClarificationPrompt: "Do you mean library stats or listening stats?",
+	})
+
+	resolved := applyPreviousTurnClarificationCarryover(sessionID, resolvedTurnContext{
+		Turn: sanitizeNormalizedTurn("Listening over the last month.", normalizedTurn{
+			Intent:     "listening",
+			SubIntent:  "listening_summary",
+			QueryScope: "listening",
+			TimeWindow: "last_month",
+		}),
+	})
+
+	if resolved.Turn.Intent != "stats" {
+		t.Fatalf("Intent = %q, want stats", resolved.Turn.Intent)
+	}
+	if resolved.Turn.QueryScope != "listening" {
+		t.Fatalf("QueryScope = %q, want listening", resolved.Turn.QueryScope)
+	}
+	if resolved.Turn.SubIntent != "library_top_artists" {
+		t.Fatalf("SubIntent = %q, want library_top_artists", resolved.Turn.SubIntent)
+	}
+	if resolved.Turn.NeedsClarification {
+		t.Fatal("expected clarification to be cleared")
+	}
+}
+
+func TestResolveTurnContextInfersArtistFromArtistCandidateConversationObject(t *testing.T) {
+	sessionID := "session-artist-object-artist-name"
+	setLastArtistCandidateSet(sessionID, "top artists last month", []artistCandidate{
+		{Name: "Radiohead", PlayCount: 12, Score: 9},
+		{Name: "Massive Attack", PlayCount: 7, Score: 4},
+	})
+	setLastActiveFocusFromTurn(sessionID, "artist_candidates", "listening_stats", normalizedTurn{
+		Intent:     "stats",
+		SubIntent:  "library_top_artists",
+		QueryScope: "listening",
+		PromptHint: "top artists last month",
+	})
+
+	resolved := resolveTurnContext(sessionID, normalizedTurn{
+		RawMessage:   "Then give me one Radiohead album to revisit tonight.",
+		Intent:       "artist_discovery",
+		FollowupMode: "query_previous_set",
+		QueryScope:   "unknown",
+	})
+
+	if !resolved.HasConversationObject {
+		t.Fatal("expected conversation object to be available")
+	}
+	if resolved.Turn.ArtistName != "Radiohead" {
+		t.Fatalf("ArtistName = %q, want Radiohead", resolved.Turn.ArtistName)
+	}
+	if resolved.Turn.ResultSetKind != "artist_candidates" {
+		t.Fatalf("ResultSetKind = %q, want artist_candidates", resolved.Turn.ResultSetKind)
+	}
+	if resolved.Turn.FollowupMode != "query_previous_set" {
+		t.Fatalf("FollowupMode = %q, want query_previous_set", resolved.Turn.FollowupMode)
+	}
+	if resolved.Turn.ReferenceTarget != "previous_results" {
+		t.Fatalf("ReferenceTarget = %q, want previous_results", resolved.Turn.ReferenceTarget)
+	}
+	if resolved.Turn.ConversationOp == "constrain" {
+		t.Fatalf("ConversationOp = %q, want non-constrain follow-up", resolved.Turn.ConversationOp)
+	}
+}
+
+func TestResolveTurnContextDoesNotInheritPromptHintAcrossFreshPivot(t *testing.T) {
+	sessionID := "session-fresh-pivot-no-prompt-inherit"
+	setLastArtistCandidateSet(sessionID, "top artists last month", []artistCandidate{
+		{Name: "Radiohead", PlayCount: 12, Score: 9},
+		{Name: "Massive Attack", PlayCount: 7, Score: 4},
+	})
+	setLastActiveFocusFromTurn(sessionID, "artist_candidates", "listening_stats", normalizedTurn{
+		Intent:     "stats",
+		SubIntent:  "library_top_artists",
+		QueryScope: "listening",
+		TimeWindow: "last_month",
+		PromptHint: "last_month",
+	})
+
+	resolved := resolveTurnContext(sessionID, sanitizeNormalizedTurn("Forget stats for a second. Find me two records in my library for a predawn drive.", normalizedTurn{
+		RawMessage:      "Forget stats for a second. Find me two records in my library for a predawn drive.",
+		Intent:          "album_discovery",
+		SubIntent:       "creative_refinement",
+		QueryScope:      "library",
+		LibraryOnly:     boolPtr(true),
+		SelectionMode:   "top_n",
+		SelectionValue:  "2",
+		StyleHints:      []string{"predawn", "drive"},
+		FollowupMode:    "none",
+		ReferenceTarget: "none",
+		PromptHint:      "",
+	}))
+
+	if resolved.Turn.PromptHint != "" {
+		t.Fatalf("PromptHint = %q, want empty for fresh pivot", resolved.Turn.PromptHint)
+	}
+	if resolved.Turn.TimeWindow != "none" {
+		t.Fatalf("TimeWindow = %q, want none for fresh pivot", resolved.Turn.TimeWindow)
+	}
+	if resolved.Turn.ArtistName != "" {
+		t.Fatalf("ArtistName = %q, want empty for fresh pivot", resolved.Turn.ArtistName)
+	}
+}
+
+func TestResolveTurnContextInfersConversationConstraintFromActiveObject(t *testing.T) {
+	sessionID := "session-conversation-object-constraint"
+	setLastCreativeAlbumSet(sessionID, "semantic_album_search", "rainy late-night walk", []creativeAlbumCandidate{
+		{Name: "Play", ArtistName: "Moby"},
+		{Name: "The Campfire Headphase", ArtistName: "Boards of Canada"},
+	})
+	setLastActiveFocusFromTurn(sessionID, "creative_albums", "result_set", normalizedTurn{
+		Intent:     "album_discovery",
+		QueryScope: "general",
+		PromptHint: "rainy late-night walk",
+	})
+
+	resolved := resolveTurnContext(sessionID, normalizedTurn{
+		RawMessage:   "Actually keep it to my library.",
+		Intent:       "album_discovery",
+		QueryScope:   "library",
+		FollowupMode: "none",
+	})
+
+	if !resolved.HasConversationObject {
+		t.Fatal("expected conversation object to be available")
+	}
+	if resolved.Turn.ConversationOp != "constrain" {
+		t.Fatalf("ConversationOp = %q, want constrain", resolved.Turn.ConversationOp)
+	}
+	if resolved.Turn.FollowupMode != "refine_previous" {
+		t.Fatalf("FollowupMode = %q, want refine_previous", resolved.Turn.FollowupMode)
+	}
+	if resolved.Turn.ReferenceTarget != "previous_results" {
+		t.Fatalf("ReferenceTarget = %q, want previous_results", resolved.Turn.ReferenceTarget)
+	}
+	if resolved.Turn.ResultSetKind != "creative_albums" {
+		t.Fatalf("ResultSetKind = %q, want creative_albums", resolved.Turn.ResultSetKind)
+	}
+}
+
+func TestResolveTurnContextInfersConversationConstraintFromDiscoveredAlbumsObject(t *testing.T) {
+	sessionID := "session-discovered-conversation-object-constraint"
+	setLastDiscoveredAlbums(sessionID, "rainy late-night walk", []discoveredAlbumCandidate{
+		{Rank: 1, AlbumTitle: "Play", ArtistName: "Moby", Year: 1999},
+		{Rank: 2, AlbumTitle: "Moon Safari", ArtistName: "Air", Year: 1998},
+	})
+
+	resolved := resolveTurnContext(sessionID, normalizedTurn{
+		RawMessage:   "Actually keep it to my library.",
+		Intent:       "album_discovery",
+		QueryScope:   "library",
+		FollowupMode: "none",
+	})
+
+	if !resolved.HasConversationObject {
+		t.Fatal("expected conversation object to be available")
+	}
+	if resolved.Turn.ConversationOp != "constrain" {
+		t.Fatalf("ConversationOp = %q, want constrain", resolved.Turn.ConversationOp)
+	}
+	if resolved.Turn.FollowupMode != "refine_previous" {
+		t.Fatalf("FollowupMode = %q, want refine_previous", resolved.Turn.FollowupMode)
+	}
+	if resolved.Turn.ReferenceTarget != "previous_results" {
+		t.Fatalf("ReferenceTarget = %q, want previous_results", resolved.Turn.ReferenceTarget)
+	}
+	if resolved.Turn.ResultSetKind != "discovered_albums" {
+		t.Fatalf("ResultSetKind = %q, want discovered_albums", resolved.Turn.ResultSetKind)
+	}
+}
+
+func TestResolveTurnContextOverridesMismatchedAlbumSetKindFromCreativeFocus(t *testing.T) {
+	sessionID := "session-creative-artist-followup-mismatch"
+	setLastCreativeAlbumSet(sessionID, "semantic_structured", "melancholic dream pop", []creativeAlbumCandidate{
+		{Name: "Honeymoon", ArtistName: "Lana Del Rey"},
+		{Name: "Warpaint", ArtistName: "Warpaint"},
+	})
+	libraryOnly := true
+	setLastActiveFocusFromTurn(sessionID, "creative_albums", "result_set", normalizedTurn{
+		QueryScope:  "library",
+		LibraryOnly: &libraryOnly,
+	})
+
+	resolved := resolveTurnContext(sessionID, normalizedTurn{
+		RawMessage:      "Then give me one Lana Del Rey album I should revisit tonight.",
+		Intent:          "album_discovery",
+		SubIntent:       "artist_starting_album",
+		QueryScope:      "library",
+		LibraryOnly:     &libraryOnly,
+		FollowupMode:    "refine_previous",
+		ReferenceTarget: "previous_results",
+		ResultSetKind:   "discovered_albums",
+		ResultAction:    "select_candidate",
+		SelectionMode:   "explicit_names",
+		SelectionValue:  "Honeymoon by Lana Del Rey",
+		ArtistName:      "Lana Del Rey",
+	})
+
+	if resolved.Turn.ResultSetKind != "creative_albums" {
+		t.Fatalf("ResultSetKind = %q, want creative_albums", resolved.Turn.ResultSetKind)
+	}
+	if resolved.ResolvedReferenceKind != "creative_albums" {
+		t.Fatalf("ResolvedReferenceKind = %q, want creative_albums", resolved.ResolvedReferenceKind)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesCreativeArtistFilteredFollowUp(t *testing.T) {
+	sessionID := "route-creative-artist-followup"
+	setLastCreativeAlbumSet(sessionID, "semantic_structured", "rainy late-night walk", []creativeAlbumCandidate{
+		{Name: "Kid A", ArtistName: "Radiohead", PlayCount: 12, LastPlayed: "2026-03-01T12:00:00Z"},
+		{Name: "Amnesiac", ArtistName: "Radiohead", PlayCount: 4, LastPlayed: "2026-02-01T12:00:00Z"},
+		{Name: "Moon Safari", ArtistName: "Air", PlayCount: 2, LastPlayed: "2026-03-05T12:00:00Z"},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			RawMessage:      "Then give me one Radiohead album I should revisit tonight.",
+			Intent:          "album_discovery",
+			FollowupMode:    "query_previous_set",
+			ReferenceTarget: "previous_results",
+			ResultSetKind:   "creative_albums",
+			ArtistName:      "Radiohead",
+			SelectionMode:   "top_n",
+			SelectionValue:  "1",
+		},
+		ResolvedReferenceKind: "creative_albums",
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Then give me one Radiohead album I should revisit tonight.", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "Kid A by Radiohead") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if strings.Contains(resp.Response, "Moon Safari") {
+		t.Fatalf("response leaked non-Radiohead candidate: %q", resp.Response)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesConversationConstraintFollowUp(t *testing.T) {
+	sessionID := "route-conversation-object-constraint"
+	setLastCreativeAlbumSet(sessionID, "semantic_album_search", "rainy late-night walk", []creativeAlbumCandidate{
+		{Name: "Play", ArtistName: "Moby"},
+		{Name: "The Campfire Headphase", ArtistName: "Boards of Canada"},
+	})
+	setLastActiveFocusFromTurn(sessionID, "creative_albums", "result_set", normalizedTurn{
+		Intent:     "album_discovery",
+		QueryScope: "general",
+		PromptHint: "rainy late-night walk",
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := resolveTurnContext(sessionID, normalizedTurn{
+		RawMessage:   "Actually keep it to my library.",
+		Intent:       "album_discovery",
+		QueryScope:   "library",
+		FollowupMode: "none",
+	})
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Actually keep it to my library.", nil, &resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "From your library") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "Play by Moby") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
+func TestTryTurnIntentRouteHandlesStructuredGeneralAlbumDiscovery(t *testing.T) {
+	originalRunner := discoverAlbumsRequestRunner
+	discoverAlbumsRequestRunner = func(_ context.Context, request discovery.Request) ([]discoveredAlbumCandidate, map[string]interface{}, error) {
+		if request.Query != "Give me three records for a rainy late-night walk." {
+			t.Fatalf("request.Query = %q", request.Query)
+		}
+		if request.Limit != 3 {
+			t.Fatalf("request.Limit = %d, want 3", request.Limit)
+		}
+		return []discoveredAlbumCandidate{
+			{Rank: 1, AlbumTitle: "Play", ArtistName: "Moby", Year: 1999, Reason: "nocturnal trip-hop pulse"},
+			{Rank: 2, AlbumTitle: "Moon Safari", ArtistName: "Air", Year: 1998, Reason: "soft, drifting night glide"},
+			{Rank: 3, AlbumTitle: "Dummy", ArtistName: "Portishead", Year: 1994, Reason: "rain-streaked late-night mood"},
+		}, map[string]interface{}{}, nil
+	}
+	defer func() {
+		discoverAlbumsRequestRunner = originalRunner
+	}()
+
+	srv := &Server{}
+	sessionID := "route-general-album-discovery"
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resp, ok := srv.tryTurnIntentRoute(ctx, &Turn{
+		SessionID:   sessionID,
+		UserMessage: "Give me three records for a rainy late-night walk.",
+		Normalized: TurnNormalized{
+			Intent:         "album_discovery",
+			QueryScope:     "general",
+			SelectionMode:  "top_n",
+			SelectionValue: "3",
+		},
+	}, nil)
+	if !ok {
+		t.Fatal("expected structured general album discovery to resolve")
+	}
+	if !strings.Contains(resp.Response, "Play by Moby") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	memory := loadTurnSessionMemory(sessionID)
+	focus, ok := memory.ActiveFocus()
+	if !ok {
+		t.Fatal("expected active focus after discovery")
+	}
+	if focus.kind != "discovered_albums" {
+		t.Fatalf("focus.kind = %q, want discovered_albums", focus.kind)
+	}
+	if focus.queryScope != "general" {
+		t.Fatalf("focus.queryScope = %q, want general", focus.queryScope)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesCreativeArtistFollowUpWithMismatchedRequestedSet(t *testing.T) {
+	sessionID := "route-creative-artist-followup-mismatch"
+	setLastCreativeAlbumSet(sessionID, "semantic_structured", "melancholic dream pop", []creativeAlbumCandidate{
+		{Name: "Honeymoon", ArtistName: "Lana Del Rey", PlayCount: 2, LastPlayed: "2026-03-01T12:00:00Z"},
+		{Name: "Warpaint", ArtistName: "Warpaint", PlayCount: 6, LastPlayed: "2026-02-01T12:00:00Z"},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			RawMessage:      "Then give me one Lana Del Rey album I should revisit tonight.",
+			Intent:          "album_discovery",
+			SubIntent:       "artist_starting_album",
+			FollowupMode:    "refine_previous",
+			ReferenceTarget: "previous_results",
+			ResultSetKind:   "discovered_albums",
+			ResultAction:    "select_candidate",
+			SelectionMode:   "explicit_names",
+			SelectionValue:  "Honeymoon by Lana Del Rey",
+			ArtistName:      "Lana Del Rey",
+			QueryScope:      "library",
+		},
+		HasActiveFocus:          true,
+		ActiveFocusKind:         "creative_albums",
+		ActiveFocusStatus:       "result_set",
+		ResolvedReferenceKind:   "creative_albums",
+		ResolvedReferenceSource: "active_focus",
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Then give me one Lana Del Rey album I should revisit tonight.", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "Honeymoon by Lana Del Rey") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if strings.Contains(resp.Response, "Warpaint") {
+		t.Fatalf("response leaked non-Lana candidate: %q", resp.Response)
+	}
+}
+
+func TestTryNormalizedIntentRouteHandlesArtistCatalogDepthFollowUp(t *testing.T) {
+	sessionID := "route-artist-catalog-depth"
+	setLastArtistCandidateSet(sessionID, "top artists last month", []artistCandidate{
+		{Name: "Radiohead", PlayCount: 12, Score: 9},
+		{Name: "Massive Attack", PlayCount: 7, Score: 4},
+		{Name: "Portishead", PlayCount: 5, Score: 4},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resolved := &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:          "stats",
+			SubIntent:       "artist_catalog_depth",
+			FollowupMode:    "query_previous_set",
+			ReferenceTarget: "previous_results",
+			QueryScope:      "library",
+			ResultSetKind:   "artist_candidates",
+		},
+		ResolvedReferenceKind: "artist_candidates",
+	}
+
+	resp, ok := srv.tryNormalizedIntentRoute(ctx, "Who has the deepest catalog?", nil, resolved)
+	if !ok {
+		t.Fatal("tryNormalizedIntentRoute() = false, want true")
+	}
+	if !strings.Contains(resp.Response, "Radiohead has the deepest catalog in your library with 9 albums") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
 func TestResolveTurnContextBindsLatestReferenceSet(t *testing.T) {
 	lastCreativeAlbumSet.mu.Lock()
 	lastCreativeAlbumSet.sessions[normalizeChatSessionID("session-latest-ref")] = creativeAlbumSetState{
@@ -1639,6 +2453,43 @@ func TestResolveTurnContextBindsLatestReferenceSet(t *testing.T) {
 		FollowupMode:       "query_previous_set",
 		ReferenceTarget:    "previous_results",
 		ReferenceQualifier: "latest_set",
+	})
+	if resolved.ResolvedReferenceKind != "semantic_albums" {
+		t.Fatalf("ResolvedReferenceKind = %q, want semantic_albums", resolved.ResolvedReferenceKind)
+	}
+	if resolved.Turn.ResultSetKind != "semantic_albums" {
+		t.Fatalf("ResultSetKind = %q, want semantic_albums", resolved.Turn.ResultSetKind)
+	}
+}
+
+func TestResolveTurnContextFallsBackWhenRequestedSetUnavailable(t *testing.T) {
+	lastCreativeAlbumSet.mu.Lock()
+	lastCreativeAlbumSet.sessions[normalizeChatSessionID("session-fallback-ref")] = creativeAlbumSetState{
+		mode:      "underplayed_albums",
+		queryText: "underplayed",
+		updatedAt: time.Now().UTC().Add(-2 * time.Minute),
+		candidates: []creativeAlbumCandidate{
+			{Name: "Older Pick", ArtistName: "Artist A"},
+		},
+	}
+	lastCreativeAlbumSet.mu.Unlock()
+	lastSemanticAlbumSearch.mu.Lock()
+	lastSemanticAlbumSearch.sessions[normalizeChatSessionID("session-fallback-ref")] = semanticAlbumSearchState{
+		queryText: "dreamy albums",
+		updatedAt: time.Now().UTC(),
+		matches: []semanticAlbumSearchMatch{
+			{Name: "Newer Pick", ArtistName: "Artist B"},
+		},
+	}
+	lastSemanticAlbumSearch.mu.Unlock()
+
+	resolved := resolveTurnContext("session-fallback-ref", normalizedTurn{
+		Intent:          "album_discovery",
+		SubIntent:       "result_set_play_recency",
+		FollowupMode:    "query_previous_set",
+		ReferenceTarget: "previous_results",
+		ResultSetKind:   "discovered_albums",
+		TimeWindow:      "this_year",
 	})
 	if resolved.ResolvedReferenceKind != "semantic_albums" {
 		t.Fatalf("ResolvedReferenceKind = %q, want semantic_albums", resolved.ResolvedReferenceKind)
@@ -1677,6 +2528,46 @@ func TestResolveTurnContextBindsLastFocusedItem(t *testing.T) {
 	}
 	if resolved.ResolvedItemKey == "" {
 		t.Fatal("expected focused item key to resolve")
+	}
+}
+
+func TestResolveTurnContextDoesNotClarifyCreativeAndSemanticAlbumSets(t *testing.T) {
+	lastCreativeAlbumSet.mu.Lock()
+	lastCreativeAlbumSet.sessions[normalizeChatSessionID("session-equivalent-album-sets")] = creativeAlbumSetState{
+		mode:      "semantic",
+		queryText: "dream pop",
+		updatedAt: time.Now().UTC(),
+		candidates: []creativeAlbumCandidate{
+			{Name: "Souvlaki", ArtistName: "Slowdive"},
+		},
+	}
+	lastCreativeAlbumSet.mu.Unlock()
+	lastSemanticAlbumSearch.mu.Lock()
+	lastSemanticAlbumSearch.sessions[normalizeChatSessionID("session-equivalent-album-sets")] = semanticAlbumSearchState{
+		queryText: "dream pop",
+		updatedAt: time.Now().UTC(),
+		matches: []semanticAlbumSearchMatch{
+			{Name: "Souvlaki", ArtistName: "Slowdive"},
+		},
+	}
+	lastSemanticAlbumSearch.mu.Unlock()
+
+	resolved := resolveTurnContext("session-equivalent-album-sets", normalizedTurn{
+		Intent:              "listening",
+		SubIntent:           "result_set_play_recency",
+		FollowupMode:        "query_previous_set",
+		ReferenceTarget:     "previous_results",
+		ReferenceQualifier:  "latest_set",
+		NeedsClarification:  true,
+		ClarificationFocus:  "reference",
+		ClarificationPrompt: "Do you mean the latest album results, discovery results, or another recent set?",
+		TimeWindow:          "ambiguous_recent",
+	})
+	if resolved.AmbiguousReference {
+		t.Fatal("did not expect equivalent album result sets to remain ambiguous")
+	}
+	if resolved.Turn.NeedsClarification {
+		t.Fatal("expected clarification to clear for equivalent album result sets")
 	}
 }
 
@@ -1843,8 +2734,21 @@ func TestCurrentResultSetCapabilitiesIncludesPlaylistCandidates(t *testing.T) {
 		if capability.SetKind != "playlist_candidates" {
 			continue
 		}
-		if len(capability.Operations) == 0 || capability.Operations[0] != "inspect_availability" {
+		if len(capability.Operations) == 0 {
 			t.Fatalf("playlist_candidates operations = %#v", capability.Operations)
+		}
+		foundAvailability := false
+		foundRefine := false
+		for _, op := range capability.Operations {
+			switch op {
+			case "inspect_availability":
+				foundAvailability = true
+			case "refine_style":
+				foundRefine = true
+			}
+		}
+		if !foundAvailability || !foundRefine {
+			t.Fatalf("playlist_candidates operations = %#v, want inspect_availability and refine_style", capability.Operations)
 		}
 		return
 	}
@@ -1916,11 +2820,7 @@ func TestNormalizedTimeWindowLabel(t *testing.T) {
 }
 
 func TestRenderNormalizedArtistDominance(t *testing.T) {
-	items := []struct {
-		ArtistName    string `json:"artistName"`
-		AlbumCount    int    `json:"albumCount"`
-		PlaysInWindow int    `json:"playsInWindow"`
-	}{
+	items := []artistListeningStatItem{
 		{ArtistName: "Radiohead", AlbumCount: 11, PlaysInWindow: 205},
 		{ArtistName: "Pink Floyd", AlbumCount: 16, PlaysInWindow: 59},
 	}
@@ -2251,6 +3151,158 @@ func TestTryNormalizedIntentRouteHandlesArtistCandidateCompareWithFocusedPrimary
 	}
 }
 
+func TestTryTurnIntentRouteHandlesTrackCandidateCompareViaConversationObject(t *testing.T) {
+	sessionID := "route-track-object-compare"
+	setLastTrackCandidateSet(sessionID, "similar_tracks", "Windowlicker", []trackCandidate{
+		{ID: "1", Title: "Balaclava", ArtistName: "Arctic Monkeys", Score: 0.91},
+		{ID: "2", Title: "Doll", ArtistName: "Foo Fighters", Score: 0.83},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resp, ok := srv.tryTurnIntentRoute(ctx, &Turn{
+		SessionID:   sessionID,
+		UserMessage: "Compare the second one to the first.",
+		Normalized: TurnNormalized{
+			Intent:                "other",
+			SubIntent:             "compare",
+			ConversationOp:        "compare",
+			FollowupMode:          "query_previous_set",
+			QueryScope:            "library",
+			ResultAction:          "compare",
+			SelectionMode:         "ordinal",
+			SelectionValue:        "2",
+			CompareSelectionMode:  "ordinal",
+			CompareSelectionValue: "1",
+			ReferenceTarget:       "previous_results",
+		},
+		Reference: TurnReference{
+			ObjectType:         "result_set",
+			ObjectKind:         "track_candidates",
+			ObjectStatus:       "result_set",
+			ObjectIntent:       "track_discovery",
+			ObjectTarget:       "previous_results",
+			HasTrackCandidates: true,
+		},
+	}, nil)
+	if !ok {
+		t.Fatal("expected conversation object track compare to resolve")
+	}
+	if !strings.Contains(resp.Response, "Selected anchor: Doll by Foo Fighters") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "comparison target: Balaclava by Arctic Monkeys") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
+func TestTryTurnIntentRouteHandlesArtistCandidateCompareViaConversationObject(t *testing.T) {
+	sessionID := "route-artist-object-compare"
+	setLastArtistCandidateSet(sessionID, "Radiohead", []artistCandidate{
+		{ID: "1", Name: "Blur", Score: 0.91},
+		{ID: "2", Name: "Coldplay", Score: 0.87},
+	})
+
+	srv := &Server{}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resp, ok := srv.tryTurnIntentRoute(ctx, &Turn{
+		SessionID:   sessionID,
+		UserMessage: "Compare the second one to the first.",
+		Normalized: TurnNormalized{
+			Intent:                "general_chat",
+			SubIntent:             "compare",
+			ConversationOp:        "compare",
+			FollowupMode:          "query_previous_set",
+			QueryScope:            "library",
+			ResultAction:          "compare",
+			SelectionMode:         "ordinal",
+			SelectionValue:        "2",
+			CompareSelectionMode:  "ordinal",
+			CompareSelectionValue: "1",
+			ReferenceTarget:       "previous_results",
+		},
+		Reference: TurnReference{
+			ObjectType:          "result_set",
+			ObjectKind:          "artist_candidates",
+			ObjectStatus:        "result_set",
+			ObjectIntent:        "artist_discovery",
+			ObjectTarget:        "previous_results",
+			HasArtistCandidates: true,
+		},
+	}, nil)
+	if !ok {
+		t.Fatal("expected conversation object artist compare to resolve")
+	}
+	if !strings.Contains(resp.Response, "Selected anchor: Coldplay") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "comparison target: Blur") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
+func TestTryTurnIntentRouteHandlesArtistCandidateRevisitViaConversationObjectWithListeningIntent(t *testing.T) {
+	originalToolRunner := executeToolWithSimilarityImpl
+	executeToolWithSimilarityImpl = func(_ context.Context, _ *graph.Resolver, _ *similarity.Service, _ string, tool string, args map[string]interface{}) (string, error) {
+		if tool != "albums" {
+			t.Fatalf("tool = %q, want albums", tool)
+		}
+		artistName := strings.TrimSpace(args["artistName"].(string))
+		switch artistName {
+		case "Radiohead":
+			return `{"data":{"albums":[{"name":"OK Computer OKNOTOK","artistName":"Radiohead","year":1997}]}}`, nil
+		case "Pink Floyd":
+			return `{"data":{"albums":[{"name":"The Wall","artistName":"Pink Floyd","year":1979}]}}`, nil
+		default:
+			t.Fatalf("unexpected artist lookup args: %#v", args)
+			return "", nil
+		}
+	}
+	defer func() {
+		executeToolWithSimilarityImpl = originalToolRunner
+	}()
+
+	sessionID := "route-artist-object-revisit-listening"
+	setLastArtistCandidateSet(sessionID, "top artists last month", []artistCandidate{
+		{ID: "1", Name: "Radiohead", Score: 0.91},
+		{ID: "2", Name: "Pink Floyd", Score: 0.87},
+	})
+
+	srv := &Server{resolver: &graph.Resolver{}}
+	ctx := context.WithValue(context.Background(), chatSessionKey, sessionID)
+	resp, ok := srv.tryTurnIntentRoute(ctx, &Turn{
+		SessionID:   sessionID,
+		UserMessage: "From those, give me two to revisit tonight.",
+		Normalized: TurnNormalized{
+			Intent:          "listening",
+			SubIntent:       "listening_summary",
+			ConversationOp:  "select",
+			FollowupMode:    "query_previous_set",
+			QueryScope:      "library",
+			SelectionMode:   "top_n",
+			SelectionValue:  "2",
+			ReferenceTarget: "previous_results",
+		},
+		Reference: TurnReference{
+			ObjectType:          "result_set",
+			ObjectKind:          "artist_candidates",
+			ObjectStatus:        "result_set",
+			ObjectIntent:        "stats",
+			ObjectTarget:        "previous_results",
+			HasArtistCandidates: true,
+		},
+	}, nil)
+	if !ok {
+		t.Fatal("expected conversation object artist revisit to resolve")
+	}
+	if !strings.Contains(resp.Response, "OK Computer OKNOTOK by Radiohead") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+	if !strings.Contains(resp.Response, "The Wall by Pink Floyd") {
+		t.Fatalf("response = %q", resp.Response)
+	}
+}
+
 func TestSelectAlbumIDsFromCandidatesSupportsOrdinalSelection(t *testing.T) {
 	candidates := []lidarrCleanupCandidate{
 		{AlbumID: 11, Title: "A"},
@@ -2374,6 +3426,83 @@ func TestShouldAttemptPlaylistCreateTurn(t *testing.T) {
 		},
 	}) {
 		t.Fatal("did not expect saved playlist vibe follow-up to route as create")
+	}
+	if !shouldAttemptPlaylistCreateTurn(&Turn{
+		UserMessage: "Make me a 12-track playlist for a foggy midnight drive.",
+		Normalized: TurnNormalized{
+			Intent:       "playlist",
+			SubIntent:    "playlist_append",
+			FollowupMode: "none",
+		},
+	}) {
+		t.Fatal("expected target-less playlist_append normalization to still route as create")
+	}
+	if !shouldAttemptPlaylistCreateTurn(&Turn{
+		UserMessage: "Make me a 12-track playlist for a foggy midnight drive.",
+		Normalized: TurnNormalized{
+			Intent:       "playlist",
+			SubIntent:    "playlist_append",
+			FollowupMode: "none",
+			TargetName:   "midnight drive",
+		},
+	}) {
+		t.Fatal("expected create wording to override noisy playlist target extraction")
+	}
+}
+
+func TestPlaylistDraftFocusTurnCarriesPlaylistObjectMetadata(t *testing.T) {
+	turn := &Turn{
+		UserMessage: "Make me a 12-track playlist for a foggy midnight drive.",
+		Normalized: TurnNormalized{
+			Intent:          "playlist",
+			SubIntent:       "playlist_vibe",
+			StyleHints:      []string{"foggy", "midnight", "drive"},
+			FollowupMode:    "none",
+			QueryScope:      "general",
+			ResultAction:    "none",
+			SelectionMode:   "none",
+			ReferenceTarget: "none",
+			Confidence:      "high",
+		},
+	}
+
+	got := playlistDraftFocusTurn(turn, "12-track playlist for a foggy midnight drive")
+	if got.Intent != "playlist" {
+		t.Fatalf("Intent = %q, want playlist", got.Intent)
+	}
+	if got.SubIntent != "playlist_vibe" {
+		t.Fatalf("SubIntent = %q, want playlist_vibe", got.SubIntent)
+	}
+	if got.ResultSetKind != "playlist_candidates" {
+		t.Fatalf("ResultSetKind = %q, want playlist_candidates", got.ResultSetKind)
+	}
+	if got.ReferenceTarget != "previous_playlist" {
+		t.Fatalf("ReferenceTarget = %q, want previous_playlist", got.ReferenceTarget)
+	}
+	if got.PromptHint != "12-track playlist for a foggy midnight drive" {
+		t.Fatalf("PromptHint = %q", got.PromptHint)
+	}
+}
+
+func TestSanitizeOrchestrationDecisionBiasesFirstTurnPlaylistCreateDespiteNoisySubIntent(t *testing.T) {
+	decision := sanitizeOrchestrationDecision(orchestrationDecision{
+		NextStage: "responder",
+	}, &resolvedTurnContext{
+		Turn: normalizedTurn{
+			Intent:       "playlist",
+			SubIntent:    "playlist_append",
+			FollowupMode: "none",
+			QueryScope:   "general",
+			PromptHint:   "12-track foggy midnight drive",
+			StyleHints:   []string{"foggy", "midnight", "drive"},
+			Confidence:   "high",
+		},
+	})
+	if decision.NextStage != "deterministic" {
+		t.Fatalf("NextStage = %q, want deterministic", decision.NextStage)
+	}
+	if decision.DeterministicMode != "normalized_first" {
+		t.Fatalf("DeterministicMode = %q, want normalized_first", decision.DeterministicMode)
 	}
 }
 
